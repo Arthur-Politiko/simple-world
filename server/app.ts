@@ -4,6 +4,7 @@ import { applyReflectionProposal, exportCharacterMemoryMarkdown, getCharacterMem
 import { chooseIntention, getDecisionChain, reflectOnEvent, talkToCharacter } from './agent'
 import { getLLMUsageSummary } from './metrics'
 import { consolidateMemory } from './forgetting'
+import { runDaysWithAutonomy } from './autonomous'
 import {
   advancePhase,
   consume,
@@ -165,6 +166,12 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
       throw new RuleError('требуются characterId и resource')
     }
     return gift(db, req.params.id, characterId, resource, Number(amount))
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/run-autonomous', async (req) => {
+    const { days } = (req.body ?? {}) as { days?: unknown }
+    const d = Number.isInteger(days) && (days as number) > 0 ? (days as number) : 1
+    return runDaysWithAutonomy(db, req.params.id, d)
   })
 
   app.setErrorHandler((err, _req, reply) => {

@@ -266,6 +266,28 @@ export default function App() {
     }
   }, [world, selectedCharacterId])
 
+  const runAutonomous = useCallback(async () => {
+    if (!world) return
+    setBusy(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/worlds/${world.world.id}/run-autonomous`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: 1 }),
+      })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      setWorld(((await response.json()) as { state: WorldState }).state)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [world])
+
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
       <h1>Живая деревня</h1>
@@ -288,6 +310,7 @@ export default function App() {
             <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
             <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
             <button onClick={() => runDays(7)} disabled={busy}>Продвинуть 7 дней</button>
+            <button onClick={runAutonomous} disabled={busy}>Автономный день (LLM)</button>
             <button onClick={() => setMode(mode === 'game' ? 'debug' : 'game')}>Режим: {mode === 'game' ? 'игра' : 'отладка'}</button>
             <button onClick={createWorld} disabled={busy}>Новый мир</button>
           </header>
