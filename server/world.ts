@@ -393,6 +393,7 @@ function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: nu
   if (phase === 3) {
     settleObligations(db, worldId, day)
     tickIllness(db, worldId, day, phase)
+    mutualAid(db, worldId, day, phase)
   }
 }
 
@@ -594,6 +595,66 @@ function tickIllness(db: DatabaseSync, worldId: string, day: number, phase: numb
       db.prepare('UPDATE characters SET health = MAX(0, health - 20) WHERE world_id = ? AND id = ?').run(worldId, c.id)
       logEvent(db, worldId, day, phase, 'illness', { characterId: c.id, characterName: c.name })
     }
+  }
+}
+
+function totalFood(db: DatabaseSync, worldId: string, characterId: string): number {
+  let total = 0
+  for (const food of FOOD_RESOURCES) {
+    total += stockOf(db, worldId, 'character', characterId, food)
+  }
+  return total
+}
+
+function pickFoodResource(db: DatabaseSync, worldId: string, characterId: string): string | null {
+  for (const food of FOOD_RESOURCES) {
+    if (stockOf(db, worldId, 'character', characterId, food) > 0) return food
+  }
+  return null
+}
+
+function updateTrust(db: DatabaseSync, worldId: string, characterId: string, targetId: string, delta: number): void {
+  const existing = db
+    .prepare('SELECT trust FROM memory_relationships WHERE world_id = ? AND character_id = ? AND target_id = ?')
+    .get(worldId, characterId, targetId) as { trust: number | null } | undefined
+  const current = existing?.trust ?? 0
+  const next = Math.max(-100, Math.min(100, current + delta))
+  db.prepare(
+    `INSERT INTO memory_relationships (world_id, character_id, target_id, note, trust, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (world_id, character_id, target_id) DO UPDATE SET trust = excluded.trust, updated_at = excluded.updated_at`,
+  ).run(worldId, characterId, targetId, 'взаимопомощь', next, new Date().toISOString())
+}
+
+/** Взаимопомощь: нуждающийся (голодный/больной) получает еду от соседа с излишком; растёт доверие. */
+function mutualAid(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const chars = db
+    .prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id')
+    .all(worldId) as unknown as CharacterRow[]
+
+  for (const n of chars) {
+    const needy = totalFood(db, worldId, n.id) === 0 || n.health < SICK_THRESHOLD
+    if (!needy) continue
+
+    const helper = chars.find(
+      (h) => h.id !== n.id && h.household_id !== n.household_id && h.health >= 40 && totalFood(db, worldId, h.id) > 2,
+    )
+    if (!helper) continue
+
+    const resource = pickFoodResource(db, worldId, helper.id)
+    if (!resource) continue
+
+    addStock(db, worldId, 'character', helper.id, resource, -1)
+    addStock(db, worldId, 'character', n.id, resource, 1)
+    updateTrust(db, worldId, n.id, helper.id, 10)
+    logEvent(db, worldId, day, phase, 'help', {
+      from: helper.id,
+      fromName: helper.name,
+      to: n.id,
+      toName: n.name,
+      resource,
+      amount: 1,
+    })
   }
 }
 
