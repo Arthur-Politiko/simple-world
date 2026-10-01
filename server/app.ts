@@ -10,6 +10,8 @@ import {
   createWorld,
   gather,
   getWorldState,
+  gift,
+  listWorlds,
   moveCharacter,
   runDays,
   trade,
@@ -40,6 +42,10 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'Деревня'
     const seed = Number.isInteger(body.seed) ? (body.seed as number) : 1
     return createWorld(db, name, seed)
+  })
+
+  app.get('/api/worlds', async () => {
+    return listWorlds(db)
   })
 
   app.get<{ Params: IdParams }>('/api/worlds/:id', async (req) => {
@@ -147,6 +153,18 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
   app.post<{ Params: { id: string; characterId: string } }>('/api/worlds/:id/characters/:characterId/consolidate', async (req) => {
     return consolidateMemory(db, req.params.id, req.params.characterId)
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/gift', async (req) => {
+    const { characterId, resource, amount } = (req.body ?? {}) as {
+      characterId?: unknown
+      resource?: unknown
+      amount?: unknown
+    }
+    if (typeof characterId !== 'string' || typeof resource !== 'string') {
+      throw new RuleError('требуются characterId и resource')
+    }
+    return gift(db, req.params.id, characterId, resource, Number(amount))
   })
 
   app.setErrorHandler((err, _req, reply) => {

@@ -865,3 +865,45 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     })),
   }
 }
+
+export interface WorldSummary {
+  id: string
+  name: string
+  seed: number
+  day: number
+  phase: number
+  created_at: string
+}
+
+export function listWorlds(db: DatabaseSync): WorldSummary[] {
+  return db
+    .prepare('SELECT id, name, seed, day, phase, created_at FROM worlds ORDER BY created_at')
+    .all() as unknown as WorldSummary[]
+}
+
+/** Действие игрока: передать ресурс персонажу. */
+export function gift(db: DatabaseSync, worldId: string, characterId: string, resource: string, amount: number): WorldState {
+  const world = getWorld(db, worldId)
+  const chr = requireCharacter(db, worldId, characterId)
+  if (!Number.isInteger(amount) || amount <= 0) {
+    throw new RuleError(`количество должно быть положительным целым: ${amount}`)
+  }
+
+  db.exec('BEGIN')
+  try {
+    addStock(db, worldId, 'character', characterId, resource, amount)
+    logEvent(db, worldId, world.day, world.phase, 'gift', {
+      characterId,
+      characterName: chr.name,
+      resource,
+      amount,
+      source: 'player',
+    })
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+
+  return getWorldState(db, worldId)
+}

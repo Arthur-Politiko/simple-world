@@ -60,6 +60,8 @@ interface WorldState {
   goals: Goal[]
   obligations: Obligation[]
   events: EventRow[]
+  facts: { id: number; day: number; type: string; payload: Record<string, unknown> }[]
+  knowledge: { id: number; source: string; summary: string; is_true: boolean; day: number }[]
 }
 
 interface IntentionResult {
@@ -96,6 +98,8 @@ export default function App() {
   const [intention, setIntention] = useState<IntentionResult | null>(null)
   const [interactionBusy, setInteractionBusy] = useState(false)
   const [interactionError, setInteractionError] = useState<string | null>(null)
+  const [mode, setMode] = useState<'game' | 'debug'>('game')
+  const [llmMetrics, setLlmMetrics] = useState<{ totals: { calls: number; completionTokens: number; cost: number | null } } | null>(null)
 
   const api = useCallback(async (path: string, options?: RequestInit) => {
     const r = await fetch(path, options)
@@ -105,6 +109,19 @@ export default function App() {
     }
     return r.json() as Promise<WorldState>
   }, [])
+
+  useEffect(() => {
+    fetch('/api/worlds')
+      .then((r) => r.json())
+      .then(async (list: Array<{ id: string }>) => {
+        if (list.length > 0) setWorld(await api(`/api/worlds/${list[list.length - 1].id}`))
+      })
+      .catch(() => {})
+    fetch('/api/metrics/llm')
+      .then((r) => r.json())
+      .then((m) => setLlmMetrics(m as { totals: { calls: number; completionTokens: number; cost: number | null } }))
+      .catch(() => {})
+  }, [api])
 
   const createWorld = useCallback(async () => {
     setBusy(true)
@@ -211,6 +228,44 @@ export default function App() {
     }
   }, [world, selectedCharacterId, message])
 
+  const runDays = useCallback(
+    async (days: number) => {
+      if (!world) return
+      setBusy(true)
+      setError(null)
+      try {
+        setWorld(await api(`/api/worlds/${world.world.id}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ days }) }))
+      } catch (e) {
+        setError(String(e))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [api, world],
+  )
+
+  const giftGrain = useCallback(async () => {
+    if (!world || !selectedCharacterId) return
+    setInteractionBusy(true)
+    setInteractionError(null)
+    try {
+      const response = await fetch(`/api/worlds/${world.world.id}/gift`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId: selectedCharacterId, resource: 'зерно', amount: 1 }),
+      })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      setWorld((await response.json()) as WorldState)
+    } catch (e) {
+      setInteractionError(String(e))
+    } finally {
+      setInteractionBusy(false)
+    }
+  }, [world, selectedCharacterId])
+
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
       <h1>Живая деревня</h1>
@@ -230,12 +285,11 @@ export default function App() {
             <div>
               <strong>День {world.world.day}</strong> · {world.phaseName} · seed {world.world.seed}
             </div>
-            <button onClick={() => advance('phase')} disabled={busy}>
-              Следующая фаза
-            </button>
-            <button onClick={() => advance('day')} disabled={busy}>
-              Продвинуть день
-            </button>
+            <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
+            <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
+            <button onClick={() => runDays(7)} disabled={busy}>Продвинуть 7 дней</button>
+            <button onClick={() => setMode(mode === 'game' ? 'debug' : 'game')}>Режим: {mode === 'game' ? 'игра' : 'отладка'}</button>
+            <button onClick={createWorld} disabled={busy}>Новый мир</button>
           </header>
 
           <h2>Жители</h2>
@@ -246,7 +300,7 @@ export default function App() {
                 <th style={th}>Роль</th>
                 <th style={th}>Локация</th>
                 <th style={th}>Сил</th>
-                <th style={th}>Память</th>
+                {mode === 'debug' && <th style={th}>Память</th>}
               </tr>
             </thead>
             <tbody>
@@ -256,11 +310,13 @@ export default function App() {
                   <td style={td}>{ROLE_TITLES[c.role] ?? c.role}</td>
                   <td style={td}>{locationOf(c.location_id)}</td>
                   <td style={td}>{c.energy}</td>
-                  <td style={td}>
-                    <button onClick={() => loadMemory(c.id)} disabled={busy}>
-                      {selectedCharacterId === c.id && memory ? 'Открыто' : 'Wiki'}
-                    </button>
-                  </td>
+                  {mode === 'debug' && (
+                    <td style={td}>
+                      <button onClick={() => loadMemory(c.id)} disabled={busy}>
+                        {selectedCharacterId === c.id && memory ? 'Открыто' : 'Wiki'}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -311,6 +367,7 @@ export default function App() {
               <h2 style={{ marginTop: 0 }}>Взаимодействие: {nameOf(selectedCharacterId)}</h2>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
                 <button onClick={() => void askIntention()} disabled={interactionBusy}>Спросить намерение</button>
+                <button onClick={() => void giftGrain()} disabled={interactionBusy}>Подарить зерно (+1)</button>
                 {intention && (
                   <span>
                     {intention.outcome === 'executed' ? '✅' : '⛔'} {intention.intention.action}
@@ -367,24 +424,36 @@ export default function App() {
             ))}
           </ul>
 
-          <h2>Журнал (последние события)</h2>
-          <ul style={{ maxHeight: 320, overflow: 'auto', border: '1px solid #ddd', padding: '0.5rem 0.5rem 0.5rem 1.5rem' }}>
-            {world.events
-              .slice(-40)
-              .reverse()
-              .map((e, i) => (
-                <li key={world.events.length - i} style={{ whiteSpace: 'nowrap' }}>
-                  <span style={{ color: '#888' }}>
-                    д{e.day} {PHASES[e.phase]} ·{' '}
-                  </span>
-                  {e.type}
-                  {typeof e.payload?.characterName === 'string' ? ` — ${e.payload.characterName}` : ''}
-                  {typeof e.payload?.amount === 'number' && typeof e.payload?.resource === 'string'
-                    ? `: ${e.payload.amount} «${e.payload.resource}»`
-                    : ''}
-                </li>
-              ))}
-          </ul>
+          {mode === 'debug' && (
+            <>
+              <h2>Журнал (последние события)</h2>
+              <ul style={{ maxHeight: 320, overflow: 'auto', border: '1px solid #ddd', padding: '0.5rem 0.5rem 0.5rem 1.5rem' }}>
+                {world.events
+                  .slice(-40)
+                  .reverse()
+                  .map((e, i) => (
+                    <li key={world.events.length - i} style={{ whiteSpace: 'nowrap' }}>
+                      <span style={{ color: '#888' }}>
+                        д{e.day} {PHASES[e.phase]} ·{' '}
+                      </span>
+                      {e.type}
+                      {typeof e.payload?.characterName === 'string' ? ` — ${e.payload.characterName}` : ''}
+                      {typeof e.payload?.amount === 'number' && typeof e.payload?.resource === 'string'
+                        ? `: ${e.payload.amount} «${e.payload.resource}»`
+                        : ''}
+                    </li>
+                  ))}
+              </ul>
+              <h2>Знания и факты</h2>
+              <h3>Факты</h3>
+              <ul>{world.facts.map((f) => <li key={f.id}>д{f.day} {f.type}</li>)}</ul>
+              <h3>Знания NPC</h3>
+              <ul>{world.knowledge.map((k) => <li key={k.id}>[{k.source}] {k.summary} ({k.is_true ? 'факт' : 'слух'})</li>)}</ul>
+              <p>
+                LLM: {llmMetrics ? `${llmMetrics.totals.calls} вызовов · ${llmMetrics.totals.completionTokens} токенов · стоимость ${llmMetrics.totals.cost ?? 'не задана'}` : '…'}
+              </p>
+            </>
+          )}
         </>
       )}
 
