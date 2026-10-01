@@ -479,7 +479,7 @@ function tickSeason(db: DatabaseSync, worldId: string, day: number, phase: numbe
     const season = seasonOfDay(day)
     if (season === 'весна') {
       sowFields(db, worldId, day, phase)
-      ageDependents(db, worldId, day, phase)
+      if (day > 1) ageDependents(db, worldId, day, phase)
     }
     if (season === 'осень') harvestFields(db, worldId, day, phase)
   }
@@ -1024,8 +1024,8 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
         s.quantity,
       )
     }
-    // начальный посев (день 1 — весна)
-    sowFields(db, id, 1, 0)
+    // бутстрап утра дня 1: посев, огород, скот, ульи, работа
+    tickPhase(db, id, 1, 0)
     for (const g of DEFAULT_GOALS) {
       db.prepare('INSERT INTO goals (world_id, character_id, description, priority) VALUES (?, ?, ?, ?)').run(
         id,

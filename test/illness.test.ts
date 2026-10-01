@@ -36,8 +36,7 @@ test('сон восстанавливает здоровье', () => {
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
   db.prepare("UPDATE characters SET health = 50 WHERE world_id = ? AND id = 'chr-marta'").run(id)
-  // дать еды, чтобы на день 1 (после посева) не голодала
-  db.prepare("INSERT INTO stock (world_id, holder_type, holder_id, resource, quantity) VALUES (?, 'character', 'chr-marta', 'овощи', 5)").run(id)
+  // (овощи с огорода уже есть после бутстрапа утра дня 1)
 
   advancePhase(db, id) // день
   advancePhase(db, id) // вечер
@@ -57,6 +56,6 @@ test('больной (health < 20) не может работать', () => {
   const st = advancePhase(db, id) // вечер (работа) — но Марта больна
 
   const marta = st.characters.find((c) => c.id === 'chr-marta')!
-  assert.equal(marta.energy, 2, 'больной не работал — энергия не тратилась')
+  assert.equal(marta.energy, 1, 'больной не работал — энергия не тратилась (бутстрап утра уже потратил 1)')
   assert.ok(st.events.some((e) => e.type === 'sick'))
 })

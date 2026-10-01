@@ -154,7 +154,17 @@ export default function App() {
     fetch('/api/worlds')
       .then((r) => r.json())
       .then(async (list: Array<{ id: string }>) => {
-        if (list.length > 0) setWorld(await api(`/api/worlds/${list[list.length - 1].id}`))
+        if (list.length > 0) {
+          const w = await api(`/api/worlds/${list[list.length - 1].id}`)
+          setWorld(w)
+          // синхронизировать флаг «Авто» с сервером (после F5 мир мог уже тикать)
+          try {
+            const auto = (await (await fetch(`/api/worlds/${w.world.id}/auto`)).json()) as { running?: boolean }
+            setAutoOn(auto.running === true)
+          } catch {
+            /* ignore */
+          }
+        }
       })
       .catch(() => {})
     fetch('/api/metrics/llm')
