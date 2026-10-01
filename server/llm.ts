@@ -71,39 +71,112 @@ function parseUsage(model: string, usage: unknown): LLMUsage {
   }
 }
 
+class LLMHttpError extends Error {
+  status: number
+  constructor(status: number, body: string) {
+    super(`LLM HTTP ${status}: ${body.slice(0, 400)}`)
+    this.name = 'LLMHttpError'
+    this.status = status
+  }
+}
+
+function readInt(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const n = Number(raw)
+  return Number.isInteger(n) && n > 0 ? n : fallback
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Простой семафор: ограничивает число одновременных LLM-запросов.
+let activeRequests = 0
+async function withConcurrency<T>(fn: () => Promise<T>): Promise<T> {
+  const max = readInt('DEEPSEEK_MAX_CONCURRENCY', 2)
+  while (activeRequests >= max) {
+    await sleep(25)
+  }
+  activeRequests++
+  try {
+    return await fn()
+  } finally {
+    activeRequests--
+  }
+}
+
+function isRetryable(error: unknown): boolean {
+  if (error instanceof LLMHttpError) return error.status >= 500
+  if (error instanceof RuleError) return false
+  return (
+    error instanceof Error &&
+    (error.name === 'AbortError' || error.name === 'TypeError' || /fetch|network|abort/i.test(error.message))
+  )
+}
+
+async function doRequest(
+  config: LLMConfig,
+  model: string,
+  messages: ChatMessage[],
+  options: ChatOptions,
+  timeoutMs: number,
+): Promise<LLMResult> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        // Обе модели — резонер-модели: токены уходят и на рассуждение, поэтому нужен запас.
+        max_tokens: options.maxTokens ?? 1024,
+        temperature: options.temperature ?? 0.7,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new LLMHttpError(response.status, body)
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>
+      usage?: unknown
+    }
+    const content = data.choices?.[0]?.message?.content ?? ''
+    if (!content.trim()) {
+      throw new Error('LLM вернул пустой ответ (возможно, слишком мал max_tokens для резонер-модели)')
+    }
+    return { content, usage: parseUsage(model, data.usage) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function chat(model: string, messages: ChatMessage[], options: ChatOptions = {}): Promise<LLMResult> {
   const config = loadLLMConfig()
   if (!config) throw new RuleError('LLM не настроен: задайте DEEPSEEK_API_KEY')
+  const maxRetries = readInt('DEEPSEEK_MAX_RETRIES', 2)
+  const timeoutMs = readInt('DEEPSEEK_TIMEOUT_MS', 120000)
 
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      // Обе модели — резонер-модели: токены уходят и на рассуждение, поэтому нужен запас.
-      max_tokens: options.maxTokens ?? 1024,
-      temperature: options.temperature ?? 0.7,
-    }),
-  })
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`LLM HTTP ${response.status}: ${body.slice(0, 400)}`)
+  let lastError: unknown
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await withConcurrency(() => doRequest(config, model, messages, options, timeoutMs))
+    } catch (error) {
+      lastError = error
+      if (!isRetryable(error) || attempt === maxRetries) throw error
+      await sleep(300 * (attempt + 1))
+    }
   }
-
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>
-    usage?: unknown
-  }
-  const content = data.choices?.[0]?.message?.content ?? ''
-  if (!content.trim()) {
-    throw new Error('LLM вернул пустой ответ (возможно, слишком мал max_tokens для резонер-модели)')
-  }
-  return { content, usage: parseUsage(model, data.usage) }
+  throw lastError
 }
 
 export async function chatJSON<T>(

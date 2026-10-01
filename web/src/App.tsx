@@ -62,6 +62,13 @@ interface WorldState {
   events: EventRow[]
 }
 
+interface IntentionResult {
+  decisionId: number
+  outcome: 'executed' | 'rejected'
+  error?: string
+  intention: { action: string; targetId?: string; resource?: string; amount?: number; reason: string }
+}
+
 const ROLE_TITLES: Record<string, string> = {
   zemledelec: 'земледелец',
   lesorub: 'лесоруб',
@@ -84,6 +91,11 @@ export default function App() {
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null)
   const [memory, setMemory] = useState<CharacterMemory | null>(null)
   const [memoryError, setMemoryError] = useState<string | null>(null)
+  const [message, setMessage] = useState('')
+  const [talkReply, setTalkReply] = useState<string | null>(null)
+  const [intention, setIntention] = useState<IntentionResult | null>(null)
+  const [interactionBusy, setInteractionBusy] = useState(false)
+  const [interactionError, setInteractionError] = useState<string | null>(null)
 
   const api = useCallback(async (path: string, options?: RequestInit) => {
     const r = await fetch(path, options)
@@ -137,6 +149,9 @@ export default function App() {
     setSelectedCharacterId(characterId)
     setMemory(null)
     setMemoryError(null)
+    setTalkReply(null)
+    setIntention(null)
+    setMessage('')
     try {
       const response = await fetch(`/api/worlds/${world.world.id}/characters/${characterId}/memory`)
       if (!response.ok) {
@@ -148,6 +163,53 @@ export default function App() {
       setMemoryError(String(e))
     }
   }, [world])
+
+  const askIntention = useCallback(async () => {
+    if (!world || !selectedCharacterId) return
+    setInteractionBusy(true)
+    setInteractionError(null)
+    setIntention(null)
+    try {
+      const response = await fetch(`/api/worlds/${world.world.id}/intention`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ characterId: selectedCharacterId }),
+      })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      setIntention((await response.json()) as IntentionResult)
+    } catch (e) {
+      setInteractionError(String(e))
+    } finally {
+      setInteractionBusy(false)
+    }
+  }, [world, selectedCharacterId])
+
+  const sendTalk = useCallback(async () => {
+    if (!world || !selectedCharacterId || !message.trim()) return
+    setInteractionBusy(true)
+    setInteractionError(null)
+    const msg = message
+    setMessage('')
+    try {
+      const response = await fetch(`/api/worlds/${world.world.id}/characters/${selectedCharacterId}/talk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg }),
+      })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      setTalkReply(((await response.json()) as { reply: string }).reply)
+    } catch (e) {
+      setInteractionError(String(e))
+    } finally {
+      setInteractionBusy(false)
+    }
+  }, [world, selectedCharacterId, message])
 
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
@@ -241,6 +303,39 @@ export default function App() {
                   )}
                 </>
               )}
+            </section>
+          )}
+
+          {selectedCharacterId && (
+            <section style={{ marginTop: '1.5rem', border: '1px solid #ddd', borderRadius: 8, padding: '1rem' }}>
+              <h2 style={{ marginTop: 0 }}>Взаимодействие: {nameOf(selectedCharacterId)}</h2>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                <button onClick={() => void askIntention()} disabled={interactionBusy}>Спросить намерение</button>
+                {intention && (
+                  <span>
+                    {intention.outcome === 'executed' ? '✅' : '⛔'} {intention.intention.action}
+                    {intention.intention.targetId ? ` → ${intention.intention.targetId}` : ''}
+                    {intention.intention.resource ? ` «${intention.intention.resource}»` : ''}
+                    {intention.intention.amount ? ` ×${intention.intention.amount}` : ''} — {intention.intention.reason}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void sendTalk() }}
+                  placeholder="Скажите что-нибудь…"
+                  style={{ flex: 1, padding: '0.4rem' }}
+                />
+                <button onClick={() => void sendTalk()} disabled={interactionBusy || !message.trim()}>Отправить</button>
+              </div>
+              {talkReply && (
+                <p style={{ marginTop: '0.75rem', marginBottom: 0 }}>
+                  <strong>{nameOf(selectedCharacterId)}:</strong> {talkReply}
+                </p>
+              )}
+              {interactionError && <p style={{ color: 'crimson', marginBottom: 0 }}>{interactionError}</p>}
             </section>
           )}
 
