@@ -150,7 +150,12 @@ export class RuleError extends Error {
 export const MAX_ENERGY = 2
 const MIN_ENERGY = -2
 const SICK_THRESHOLD = 20
+const REST_DAY_INTERVAL = 7
 export const FOOD_RESOURCES = ['зерно', 'рыба', 'овощи'] as const
+
+function isRestDay(day: number): boolean {
+  return day > 0 && day % REST_DAY_INTERVAL === 0
+}
 
 const FORAGE_PHASE = 1 // фаза «день»
 const FORAGE_RESOURCE = 'ягоды'
@@ -384,7 +389,11 @@ function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: nu
 
   for (const c of chars) {
     if (phase === 0 || phase === 2) {
-      work(db, worldId, day, phase, c)
+      if (isRestDay(day)) {
+        restDay(db, worldId, day, phase, c)
+      } else {
+        work(db, worldId, day, phase, c)
+      }
     } else if (phase === 1) {
       eat(db, worldId, day, phase, c)
     } else if (phase === 3) {
@@ -509,6 +518,12 @@ function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: nu
       db.prepare('UPDATE livestock SET health = ? WHERE world_id = ? AND household_id = ? AND kind = ?').run(health, worldId, lv.household_id, lv.kind)
     }
   }
+}
+
+/** Выходной: без работы, отдых восстанавливает здоровье. */
+function restDay(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
+  db.prepare('UPDATE characters SET health = MIN(100, health + 5) WHERE world_id = ? AND id = ?').run(worldId, c.id)
+  logEvent(db, worldId, day, phase, 'rest_day', { characterId: c.id, characterName: c.name })
 }
 
 function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
