@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface Character {
   id: string
@@ -311,6 +311,32 @@ export default function App() {
     }
   }, [world])
 
+  const autoRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [autoOn, setAutoOn] = useState(false)
+  const advanceRef = useRef(advance)
+  useEffect(() => {
+    advanceRef.current = advance
+  }, [advance])
+
+  const toggleAuto = useCallback(() => {
+    if (autoRef.current) {
+      clearInterval(autoRef.current)
+      autoRef.current = null
+      setAutoOn(false)
+    } else {
+      setAutoOn(true)
+      autoRef.current = setInterval(() => {
+        void advanceRef.current('phase')
+      }, 1000)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (autoRef.current) clearInterval(autoRef.current)
+    }
+  }, [])
+
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
       <h1>Живая деревня</h1>
@@ -333,6 +359,8 @@ export default function App() {
             <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
             <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
             <button onClick={() => runDays(7)} disabled={busy}>Продвинуть 7 дней</button>
+            <button onClick={() => runDays(28)} disabled={busy}>Год (28 дн.)</button>
+            <button onClick={toggleAuto} disabled={busy}>{autoOn ? '⏸ Стоп' : '▶ Авто'}</button>
             <button onClick={runAutonomous} disabled={busy}>Автономный день (LLM)</button>
             <button onClick={() => setMode(mode === 'game' ? 'debug' : 'game')}>Режим: {mode === 'game' ? 'игра' : 'отладка'}</button>
             <button onClick={createWorld} disabled={busy}>Новый мир</button>
