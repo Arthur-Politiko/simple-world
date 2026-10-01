@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -168,6 +168,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 6) migrateV6ToV7(db)
   if (currentVersion <= 7) migrateV7ToV8(db)
   if (currentVersion <= 8) migrateV8ToV9(db)
+  if (currentVersion <= 9) migrateV9ToV10(db)
   assertSchemaVersion(db)
 }
 
@@ -361,6 +362,28 @@ function migrateV8ToV9(db: DatabaseSync): void {
         kind TEXT NOT NULL,
         size INTEGER NOT NULL,
         harvest INTEGER,
+        PRIMARY KEY (world_id, household_id, kind)
+      );
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('9')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add livestock (скот) per household. */
+function migrateV9ToV10(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS livestock (
+        world_id TEXT NOT NULL,
+        household_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        health INTEGER NOT NULL,
         PRIMARY KEY (world_id, household_id, kind)
       );
     `)

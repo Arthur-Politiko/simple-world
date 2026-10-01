@@ -113,12 +113,21 @@ export interface PlotRow {
   harvest: number | null
 }
 
+export interface LivestockRow {
+  world_id: string
+  household_id: string
+  kind: string
+  count: number
+  health: number
+}
+
 export interface WorldState {
   world: WorldRow
   phaseName: string
   locations: LocationRow[]
   households: HouseholdRow[]
   plots: PlotRow[]
+  livestock: LivestockRow[]
   characters: CharacterRow[]
   stock: StockRow[]
   goals: GoalRow[]
@@ -148,6 +157,12 @@ const FIELD_HARVEST: Record<string, number> = {
   'hh-jan': 25,
   'hh-grzegorz': 10,
   'hh-inn': 5,
+}
+// скот: корм (зерно в день), продукт, тяга
+const LIVESTOCK: Record<string, { title: string; feed: number; product?: string; productPerDay?: number; traction?: boolean }> = {
+  корова: { title: 'корова', feed: 1, product: 'молоко', productPerDay: 1 },
+  птица: { title: 'птица', feed: 0, product: 'яйца', productPerDay: 1 },
+  вол: { title: 'вол', feed: 2, traction: true },
 }
 const COIN = 'монеты'
 
@@ -216,6 +231,14 @@ const INITIAL_STOCK = [
   { holderType: 'character', holderId: 'chr-grzegorz', resource: 'монеты', quantity: 6 },
   { holderType: 'character', holderId: 'chr-jan', resource: 'монеты', quantity: 6 },
   { holderType: 'character', holderId: 'chr-tomek', resource: 'монеты', quantity: 5 },
+]
+
+const INITIAL_LIVESTOCK = [
+  { householdId: 'hh-marta', kind: 'вол', count: 1 },
+  { householdId: 'hh-marta', kind: 'корова', count: 1 },
+  { householdId: 'hh-grzegorz', kind: 'корова', count: 1 },
+  { householdId: 'hh-jan', kind: 'птица', count: 2 },
+  { householdId: 'hh-inn', kind: 'птица', count: 1 },
 ]
 
 const DEFAULT_GOALS = [
@@ -349,6 +372,7 @@ function forageAmount(seed: number, day: number): number {
 function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   if (phase === 0) {
     produceGardenVegetables(db, worldId, day, phase)
+    tickLivestock(db, worldId, day, phase)
   }
 
   const chars = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
@@ -368,6 +392,43 @@ function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: nu
   }
 }
 
+/** Распределяет ресурс между членами двора; возвращает фактически выданное количество. */
+function distributeToHousehold(db: DatabaseSync, worldId: string, householdId: string, resource: string, amount: number): number {
+  const members = db
+    .prepare('SELECT id FROM characters WHERE world_id = ? AND household_id = ? ORDER BY id')
+    .all(worldId, householdId) as unknown as Array<{ id: string }>
+  if (members.length === 0) return 0
+
+  const per = Math.floor(amount / members.length)
+  const remainder = amount % members.length
+  let total = 0
+  for (let i = 0; i < members.length; i++) {
+    const a = per + (i === 0 ? remainder : 0)
+    if (a <= 0) continue
+    addStock(db, worldId, 'character', members[i].id, resource, a)
+    total += a
+  }
+  return total
+}
+
+/** Списывает ресурс у членов двора (по очереди); возвращает фактически списанное. */
+function consumeFromHousehold(db: DatabaseSync, worldId: string, householdId: string, resource: string, amount: number): number {
+  const members = db
+    .prepare('SELECT id FROM characters WHERE world_id = ? AND household_id = ? ORDER BY id')
+    .all(worldId, householdId) as unknown as Array<{ id: string }>
+  let remaining = amount
+  for (const m of members) {
+    if (remaining <= 0) break
+    const have = stockOf(db, worldId, 'character', m.id, resource)
+    const take = Math.min(have, remaining)
+    if (take > 0) {
+      addStock(db, worldId, 'character', m.id, resource, -take)
+      remaining -= take
+    }
+  }
+  return amount - remaining
+}
+
 /** Огород каждого двора даёт базовое пропитание (овощи), распределяемое между членами двора. */
 function produceGardenVegetables(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   const plots = db
@@ -376,22 +437,63 @@ function produceGardenVegetables(db: DatabaseSync, worldId: string, day: number,
 
   for (const plot of plots) {
     if (plot.size <= 0) continue
-    const members = db
-      .prepare('SELECT id FROM characters WHERE world_id = ? AND household_id = ? ORDER BY id')
-      .all(worldId, plot.household_id) as unknown as Array<{ id: string }>
-    if (members.length === 0) continue
-
-    const per = Math.floor(plot.size / members.length)
-    const remainder = plot.size % members.length
-    let total = 0
-    for (let i = 0; i < members.length; i++) {
-      const amount = per + (i === 0 ? remainder : 0)
-      if (amount <= 0) continue
-      addStock(db, worldId, 'character', members[i].id, 'овощи', amount)
-      total += amount
-    }
+    const total = distributeToHousehold(db, worldId, plot.household_id, 'овощи', plot.size)
     if (total > 0) {
       logEvent(db, worldId, day, phase, 'garden_harvest', { householdId: plot.household_id, resource: 'овощи', amount: total })
+    }
+  }
+}
+
+/** Скот ест корм, даёт продукт, болеет и может пасть. */
+function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const world = getWorld(db, worldId)
+  const rows = db
+    .prepare('SELECT * FROM livestock WHERE world_id = ? ORDER BY household_id, kind')
+    .all(worldId) as unknown as LivestockRow[]
+
+  let idx = 0
+  for (const lv of rows) {
+    const spec = LIVESTOCK[lv.kind]
+    if (!spec || lv.count <= 0) continue
+
+    // корм
+    const feedNeeded = lv.count * spec.feed
+    const fed = consumeFromHousehold(db, worldId, lv.household_id, 'зерно', feedNeeded)
+
+    // здоровье
+    let health = lv.health
+    if (fed >= feedNeeded) {
+      health = Math.min(100, health + 5)
+    } else {
+      health = Math.max(0, health - 20)
+    }
+
+    // болезнь (детерминированно от seed + день + индекс)
+    const rng = mulberry32((world.seed + day * 0x9e3779b9 + idx * 0x85ebca6b) >>> 0)
+    idx++
+    if (rng() < 0.08) {
+      health = Math.max(0, health - 30)
+      logEvent(db, worldId, day, phase, 'livestock_illness', { householdId: lv.household_id, kind: lv.kind })
+    }
+
+    // продукт
+    if (health >= 40 && spec.product) {
+      const amount = lv.count * (spec.productPerDay ?? 1)
+      distributeToHousehold(db, worldId, lv.household_id, spec.product, amount)
+      logEvent(db, worldId, day, phase, 'livestock_produce', { householdId: lv.household_id, kind: lv.kind, resource: spec.product, amount })
+    }
+
+    // смерть одной головы / обновление здоровья
+    if (health <= 0) {
+      const newCount = lv.count - 1
+      if (newCount <= 0) {
+        db.prepare('DELETE FROM livestock WHERE world_id = ? AND household_id = ? AND kind = ?').run(worldId, lv.household_id, lv.kind)
+      } else {
+        db.prepare('UPDATE livestock SET count = ?, health = 100 WHERE world_id = ? AND household_id = ? AND kind = ?').run(newCount, worldId, lv.household_id, lv.kind)
+      }
+      logEvent(db, worldId, day, phase, 'livestock_died', { householdId: lv.household_id, kind: lv.kind })
+    } else {
+      db.prepare('UPDATE livestock SET health = ? WHERE world_id = ? AND household_id = ? AND kind = ?').run(health, worldId, lv.household_id, lv.kind)
     }
   }
 }
@@ -407,6 +509,11 @@ function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: 
 
   let amount = role.yieldPerWork
   if (role.produces === 'зерно') {
+    // тяга вола увеличивает сбор
+    const hasOx = db
+      .prepare("SELECT 1 FROM livestock WHERE world_id = ? AND household_id = ? AND kind = 'вол' AND count > 0 AND health >= 40")
+      .get(worldId, c.household_id)
+    if (hasOx) amount += 1
     // сбор ограничен остатком урожая на наделе двора
     const plot = db
       .prepare("SELECT harvest FROM plots WHERE world_id = ? AND household_id = ? AND kind = 'поле'")
@@ -563,6 +670,9 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
       // поле — зерно; у земледельцев поле больше
       const grain = FIELD_HARVEST[hh.id] ?? 8
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest) VALUES (?, ?, 'поле', ?, ?)").run(id, hh.id, grain, grain)
+    }
+    for (const lv of INITIAL_LIVESTOCK) {
+      db.prepare('INSERT INTO livestock (world_id, household_id, kind, count, health) VALUES (?, ?, ?, ?, 100)').run(id, lv.householdId, lv.kind, lv.count)
     }
     for (const chr of DEFAULT_CHARACTERS) {
       db.prepare(
@@ -881,6 +991,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
   const locations = db.prepare('SELECT * FROM locations WHERE world_id = ? ORDER BY id').all(worldId) as unknown as LocationRow[]
   const households = db.prepare('SELECT * FROM households WHERE world_id = ? ORDER BY id').all(worldId) as unknown as HouseholdRow[]
   const plots = db.prepare('SELECT * FROM plots WHERE world_id = ? ORDER BY household_id, kind').all(worldId) as unknown as PlotRow[]
+  const livestock = db.prepare('SELECT * FROM livestock WHERE world_id = ? ORDER BY household_id, kind').all(worldId) as unknown as LivestockRow[]
   const characters = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
   const stock = db
     .prepare('SELECT * FROM stock WHERE world_id = ? ORDER BY holder_type, holder_id, resource')
@@ -907,6 +1018,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     locations,
     households,
     plots,
+    livestock,
     characters,
     stock,
     goals,
