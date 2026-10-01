@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 interface Character {
   id: string
@@ -329,31 +329,44 @@ export default function App() {
     }
   }, [world])
 
-  const autoRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [autoOn, setAutoOn] = useState(false)
-  const advanceRef = useRef(advance)
-  useEffect(() => {
-    advanceRef.current = advance
-  }, [advance])
 
-  const toggleAuto = useCallback(() => {
-    if (autoRef.current) {
-      clearInterval(autoRef.current)
-      autoRef.current = null
-      setAutoOn(false)
-    } else {
-      setAutoOn(true)
-      autoRef.current = setInterval(() => {
-        void advanceRef.current('phase')
-      }, 1000)
+  const toggleAuto = useCallback(async () => {
+    if (!world) return
+    setError(null)
+    try {
+      if (autoOn) {
+        await fetch(`/api/worlds/${world.world.id}/auto-stop`, { method: 'POST' })
+        setAutoOn(false)
+      } else {
+        const r = await fetch(`/api/worlds/${world.world.id}/auto`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intervalMs: 1000 }),
+        })
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string }
+          throw new Error(body.error ?? `HTTP ${r.status}`)
+        }
+        setAutoOn(true)
+      }
+    } catch (e) {
+      setError(String(e))
     }
-  }, [])
+  }, [world, autoOn])
 
+  const worldId = world?.world.id
+  // пока сервер двигает мир — опрашиваем его состояние
   useEffect(() => {
-    return () => {
-      if (autoRef.current) clearInterval(autoRef.current)
-    }
-  }, [])
+    if (!autoOn || !worldId) return
+    const t = setInterval(() => {
+      fetch(`/api/worlds/${worldId}`)
+        .then((r) => r.json())
+        .then((w) => setWorld(w as WorldState))
+        .catch(() => {})
+    }, 1000)
+    return () => clearInterval(t)
+  }, [autoOn, worldId])
 
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>

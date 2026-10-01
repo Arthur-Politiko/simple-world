@@ -5,6 +5,7 @@ import { chooseIntention, getDecisionChain, reflectOnEvent, talkToCharacter } fr
 import { getLLMUsageSummary } from './metrics'
 import { consolidateMemory } from './forgetting'
 import { runDaysWithAutonomy } from './autonomous'
+import { getAuto, startAuto, stopAuto } from './scheduler'
 import {
   advancePhase,
   consume,
@@ -172,6 +173,20 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     const { days } = (req.body ?? {}) as { days?: unknown }
     const d = Number.isInteger(days) && (days as number) > 0 ? (days as number) : 1
     return runDaysWithAutonomy(db, req.params.id, d)
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/auto', async (req) => {
+    const { intervalMs } = (req.body ?? {}) as { intervalMs?: unknown }
+    const ms = Number.isInteger(intervalMs) && (intervalMs as number) > 0 ? (intervalMs as number) : 1000
+    return startAuto(db, req.params.id, ms)
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/auto-stop', async (req) => {
+    return stopAuto(req.params.id)
+  })
+
+  app.get<{ Params: IdParams }>('/api/worlds/:id/auto', async (req) => {
+    return getAuto(req.params.id)
   })
 
   app.setErrorHandler((err, _req, reply) => {
