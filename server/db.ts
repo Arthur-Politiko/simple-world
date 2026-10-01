@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -78,6 +78,34 @@ function migrate(db: DatabaseSync): void {
       due_day INTEGER NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       settled_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS facts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      world_id TEXT NOT NULL,
+      day INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS knowledge (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      world_id TEXT NOT NULL,
+      character_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      fact_id INTEGER,
+      is_true INTEGER NOT NULL,
+      day INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS trader (
+      world_id TEXT PRIMARY KEY,
+      money INTEGER NOT NULL,
+      salt INTEGER NOT NULL,
+      grain INTEGER NOT NULL,
+      present INTEGER NOT NULL DEFAULT 0,
+      present_day INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS stock (

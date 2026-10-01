@@ -8,6 +8,7 @@ import {
   getWorldState,
   moveCharacter,
   runDays,
+  trade,
   RuleError,
 } from './world'
 
@@ -80,6 +81,19 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
   app.post<{ Params: IdParams }>('/api/worlds/:id/run', async (req) => {
     const { days } = (req.body ?? {}) as { days?: unknown }
     return runDays(db, req.params.id, Number(days))
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/trade', async (req) => {
+    const { characterId, action, resource, amount } = (req.body ?? {}) as {
+      characterId?: unknown
+      action?: unknown
+      resource?: unknown
+      amount?: unknown
+    }
+    if (typeof characterId !== 'string' || typeof action !== 'string' || typeof resource !== 'string') {
+      throw new RuleError('требуются characterId, action и resource')
+    }
+    return trade(db, req.params.id, characterId, action, resource, Number(amount))
   })
 
   app.setErrorHandler((err, _req, reply) => {

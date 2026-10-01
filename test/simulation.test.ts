@@ -43,8 +43,8 @@ test('добыча ограничена трудом: за день не бол�
   runDays(db, id, 1)
 
   const after = sumResource(getWorldState(db, id), 'зерно')
-  // произведено = изменение + съедено за день (6 персонажей × 1)
-  const produced = after - before + 6
+  // произведено = изменение + съедено за день (7 персонажей × 1)
+  const produced = after - before + 7
   // максимум: 3 земледельца × 2 смены × 2 = 12
   assert.ok(produced >= 0 && produced <= 12, `произведено за день вне лимита: ${produced}`)
 })

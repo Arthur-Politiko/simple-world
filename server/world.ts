@@ -65,6 +65,34 @@ export interface ObligationRow {
   settled_at: string | null
 }
 
+export interface FactRow {
+  id: number
+  world_id: string
+  day: number
+  type: string
+  payload: unknown
+}
+
+export interface KnowledgeRow {
+  id: number
+  world_id: string
+  character_id: string
+  source: string
+  summary: string
+  fact_id: number | null
+  is_true: boolean
+  day: number
+}
+
+export interface TraderRow {
+  world_id: string
+  money: number
+  salt: number
+  grain: number
+  present: number
+  present_day: number | null
+}
+
 export interface EventRow {
   id: number
   world_id: string
@@ -85,6 +113,9 @@ export interface WorldState {
   stock: StockRow[]
   goals: GoalRow[]
   obligations: ObligationRow[]
+  facts: FactRow[]
+  knowledge: KnowledgeRow[]
+  trader: TraderRow
   events: EventRow[]
 }
 
@@ -97,10 +128,23 @@ export class RuleError extends Error {
 }
 
 export const MAX_ENERGY = 2
-export const FOOD_RESOURCE = 'зерно'
+export const FOOD_RESOURCES = ['зерно', 'рыба'] as const
 
 const FORAGE_PHASE = 1 // фаза «день»
 const FORAGE_RESOURCE = 'ягоды'
+const FIELD_LOCATION = 'loc-field'
+const HARVEST_RESOURCE = 'урожай'
+const COIN = 'монеты'
+
+const TRADER_MONEY = 40
+const TRADER_SALT = 10
+const TRADER_GRAIN = 20
+const ROAD_WASHOUT_DAYS = 4
+
+// что торговец покупает у деревни (цена за единицу)
+const BUY_PRICES: Record<string, number> = { дрова: 1, рыба: 2, ткань: 3 }
+// что торговец продаёт деревне (цена за единицу)
+const SELL_PRICES: Record<string, number> = { зерно: 2, соль: 2 }
 
 interface RoleDef {
   title: string
@@ -113,6 +157,7 @@ const ROLES: Record<string, RoleDef> = {
   lesorub: { title: 'лесоруб', produces: 'дрова', yieldPerWork: 2 },
   rybak: { title: 'рыбак', produces: 'рыба', yieldPerWork: 1 },
   tkachiha: { title: 'ткачиха', produces: 'ткань', yieldPerWork: 1 },
+  traktirschik: { title: 'трактирщик', produces: '', yieldPerWork: 0 },
 }
 
 const DEFAULT_LOCATIONS = [
@@ -127,6 +172,7 @@ const DEFAULT_HOUSEHOLDS = [
   { id: 'hh-marta', name: 'Хозяйство Марты', locationId: 'loc-village' },
   { id: 'hh-grzegorz', name: 'Хозяйство Гжегожа', locationId: 'loc-village' },
   { id: 'hh-jan', name: 'Хозяйство Яна', locationId: 'loc-village' },
+  { id: 'hh-inn', name: 'Трактир', locationId: 'loc-inn' },
 ]
 
 const DEFAULT_CHARACTERS = [
@@ -136,6 +182,7 @@ const DEFAULT_CHARACTERS = [
   { id: 'chr-kasya', name: 'Кася', locationId: 'loc-village', role: 'tkachiha', householdId: 'hh-grzegorz' },
   { id: 'chr-jan', name: 'Ян', locationId: 'loc-village', role: 'rybak', householdId: 'hh-jan' },
   { id: 'chr-staszek', name: 'Сташек', locationId: 'loc-village', role: 'zemledelec', householdId: 'hh-jan' },
+  { id: 'chr-tomek', name: 'Томек', locationId: 'loc-inn', role: 'traktirschik', householdId: 'hh-inn' },
 ]
 
 const INITIAL_STOCK = [
@@ -145,9 +192,16 @@ const INITIAL_STOCK = [
   { holderType: 'character', holderId: 'chr-kasya', resource: 'зерно', quantity: 5 },
   { holderType: 'character', holderId: 'chr-jan', resource: 'зерно', quantity: 5 },
   { holderType: 'character', holderId: 'chr-staszek', resource: 'зерно', quantity: 6 },
+  { holderType: 'character', holderId: 'chr-tomek', resource: 'зерно', quantity: 4 },
   { holderType: 'character', holderId: 'chr-grzegorz', resource: 'дрова', quantity: 4 },
   { holderType: 'character', holderId: 'chr-marta', resource: 'дрова', quantity: 3 },
   { holderType: 'character', holderId: 'chr-tomas', resource: 'дрова', quantity: 3 },
+  { holderType: 'character', holderId: 'chr-jan', resource: 'рыба', quantity: 2 },
+  { holderType: 'character', holderId: 'chr-marta', resource: 'монеты', quantity: 8 },
+  { holderType: 'character', holderId: 'chr-grzegorz', resource: 'монеты', quantity: 6 },
+  { holderType: 'character', holderId: 'chr-jan', resource: 'монеты', quantity: 6 },
+  { holderType: 'character', holderId: 'chr-tomek', resource: 'монеты', quantity: 5 },
+  { holderType: 'location', holderId: 'loc-field', resource: HARVEST_RESOURCE, quantity: 80 },
 ]
 
 const DEFAULT_GOALS = [
@@ -155,12 +209,16 @@ const DEFAULT_GOALS = [
   { characterId: 'chr-marta', description: 'выплатить оброк сеньору', priority: 2 },
   { characterId: 'chr-grzegorz', description: 'заготовить дрова на зиму', priority: 1 },
   { characterId: 'chr-jan', description: 'обеспечить семью рыбой', priority: 1 },
+  { characterId: 'chr-tomek', description: 'собирать и передавать новости', priority: 1 },
 ]
 
 const DEFAULT_OBLIGATIONS = [
-  { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 7 },
-  { characterId: 'chr-grzegorz', recipient: 'сеньор', resource: 'дрова', amount: 10, dueDay: 7 },
+  { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 10, dueDay: 7 },
+  { characterId: 'chr-grzegorz', recipient: 'сеньор', resource: 'дрова', amount: 6, dueDay: 7 },
   { characterId: 'chr-tomas', recipient: 'сеньор', resource: 'зерно', amount: 10, dueDay: 10 },
+  { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 20, dueDay: 20 },
+  { characterId: 'chr-grzegorz', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 20 },
+  { characterId: 'chr-jan', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 20 },
 ]
 
 function getWorld(db: DatabaseSync, worldId: string): WorldRow {
@@ -183,6 +241,12 @@ function requireLocation(db: DatabaseSync, worldId: string, locationId: string):
     .get(locationId, worldId) as LocationRow | undefined
   if (!l) throw new RuleError(`локация не найдена: ${locationId}`)
   return l
+}
+
+function getTrader(db: DatabaseSync, worldId: string): TraderRow {
+  const t = db.prepare('SELECT * FROM trader WHERE world_id = ?').get(worldId) as TraderRow | undefined
+  if (!t) throw new RuleError('торговец не инициализирован')
+  return t
 }
 
 function addStock(
@@ -226,6 +290,41 @@ function logEvent(db: DatabaseSync, worldId: string, day: number, phase: number,
   ).run(worldId, day, phase, seq, type, JSON.stringify(payload), new Date().toISOString())
 }
 
+function addFact(db: DatabaseSync, worldId: string, day: number, type: string, payload: unknown): number {
+  const res = db
+    .prepare('INSERT INTO facts (world_id, day, type, payload) VALUES (?, ?, ?, ?)')
+    .run(worldId, day, type, JSON.stringify(payload))
+  return Number(res.lastInsertRowid)
+}
+
+function deliverNews(
+  db: DatabaseSync,
+  worldId: string,
+  day: number,
+  phase: number,
+  source: string,
+  summary: string,
+  isTrue: boolean,
+  factId: number | null,
+): void {
+  const audience = db
+    .prepare("SELECT * FROM characters WHERE world_id = ? AND location_id = 'loc-inn'")
+    .all(worldId) as unknown as CharacterRow[]
+
+  for (const c of audience) {
+    db.prepare(
+      'INSERT INTO knowledge (world_id, character_id, source, summary, fact_id, is_true, day) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(worldId, c.id, source, summary, factId, isTrue ? 1 : 0, day)
+  }
+
+  logEvent(db, worldId, day, phase, 'news', {
+    source,
+    summary,
+    isTrue,
+    audience: audience.map((c) => c.id),
+  })
+}
+
 function forageAmount(seed: number, day: number): number {
   const rng = mulberry32((seed + day * 0x9e3779b9) >>> 0)
   return intRange(rng, 1, 5)
@@ -253,37 +352,51 @@ function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: nu
 
 function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
   const role = ROLES[c.role]
-  if (!role) return
+  if (!role || role.yieldPerWork <= 0) return
 
   if (c.energy < 1) {
     logEvent(db, worldId, day, phase, 'rest', { characterId: c.id, characterName: c.name, reason: 'усталость' })
     return
   }
 
+  let amount = role.yieldPerWork
+  if (role.produces === 'зерно') {
+    // сбор ограничен остатком урожая на поле
+    const pool = stockOf(db, worldId, 'location', FIELD_LOCATION, HARVEST_RESOURCE)
+    if (pool <= 0) {
+      logEvent(db, worldId, day, phase, 'field_empty', { characterId: c.id, characterName: c.name })
+      return
+    }
+    amount = Math.min(amount, pool)
+    addStock(db, worldId, 'location', FIELD_LOCATION, HARVEST_RESOURCE, -amount)
+  }
+
   db.prepare('UPDATE characters SET energy = energy - 1 WHERE world_id = ? AND id = ?').run(worldId, c.id)
-  addStock(db, worldId, 'character', c.id, role.produces, role.yieldPerWork)
+  addStock(db, worldId, 'character', c.id, role.produces, amount)
   logEvent(db, worldId, day, phase, 'work', {
     characterId: c.id,
     characterName: c.name,
     role: role.title,
     resource: role.produces,
-    amount: role.yieldPerWork,
+    amount,
   })
 }
 
 function eat(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
-  const have = stockOf(db, worldId, 'character', c.id, FOOD_RESOURCE)
-  if (have >= 1) {
-    addStock(db, worldId, 'character', c.id, FOOD_RESOURCE, -1)
-    logEvent(db, worldId, day, phase, 'eat', {
-      characterId: c.id,
-      characterName: c.name,
-      resource: FOOD_RESOURCE,
-      amount: 1,
-    })
-  } else {
-    logEvent(db, worldId, day, phase, 'hunger', { characterId: c.id, characterName: c.name })
+  for (const food of FOOD_RESOURCES) {
+    const have = stockOf(db, worldId, 'character', c.id, food)
+    if (have >= 1) {
+      addStock(db, worldId, 'character', c.id, food, -1)
+      logEvent(db, worldId, day, phase, 'eat', {
+        characterId: c.id,
+        characterName: c.name,
+        resource: food,
+        amount: 1,
+      })
+      return
+    }
   }
+  logEvent(db, worldId, day, phase, 'hunger', { characterId: c.id, characterName: c.name })
 }
 
 function sleep(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
@@ -326,6 +439,38 @@ function settleObligations(db: DatabaseSync, worldId: string, day: number): void
       })
     }
   }
+}
+
+// ---------- внешний мир: торговец, события, слухи ----------
+
+function handleTraderVisit(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const washed = db
+    .prepare('SELECT 1 AS x FROM facts WHERE world_id = ? AND type = ? AND day BETWEEN ? AND ?')
+    .get(worldId, 'road_washout', day - ROAD_WASHOUT_DAYS, day)
+
+  if (washed) {
+    logEvent(db, worldId, day, phase, 'trader_cancelled', { reason: 'дорога размыта' })
+    deliverNews(db, worldId, day, phase, 'торговец', 'не приехал — дорога размыта', true, null)
+    return
+  }
+
+  db.prepare('UPDATE trader SET money = ?, salt = ?, grain = ?, present = 1, present_day = ? WHERE world_id = ?').run(
+    TRADER_MONEY,
+    TRADER_SALT,
+    TRADER_GRAIN,
+    day,
+    worldId,
+  )
+  const factId = addFact(db, worldId, day, 'trader_arrived', {
+    buyPrices: BUY_PRICES,
+    sellPrices: SELL_PRICES,
+  })
+  deliverNews(db, worldId, day, phase, 'торговец', 'приехал и торгует', true, factId)
+  logEvent(db, worldId, day, phase, 'trader_arrived', {
+    money: TRADER_MONEY,
+    salt: TRADER_SALT,
+    grain: TRADER_GRAIN,
+  })
 }
 
 // ---------- создание и продвижение мира ----------
@@ -387,11 +532,29 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
       ).run(id, o.characterId, o.recipient, o.resource, o.amount, o.dueDay)
     }
 
+    db.prepare('INSERT INTO trader (world_id, money, salt, grain, present) VALUES (?, 0, 0, 0, 0)').run(id)
+
+    // запланированные события
     db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, 1, ?, ?, ?)').run(
       id,
       FORAGE_PHASE,
       'forage',
       JSON.stringify({ resource: FORAGE_RESOURCE, locationId: 'loc-forest' }),
+    )
+    db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, 5, 0, ?, ?)').run(
+      id,
+      'trader_visit',
+      '{}',
+    )
+    db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, 8, 0, ?, ?)').run(
+      id,
+      'road_washout',
+      '{}',
+    )
+    db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, 9, 0, ?, ?)').run(
+      id,
+      'rumor',
+      '{}',
     )
 
     logEvent(db, id, 1, 0, 'world_created', { name, seed })
@@ -448,6 +611,21 @@ export function advancePhase(db: DatabaseSync, worldId: string): WorldState {
           ev.type,
           ev.payload,
         )
+      } else if (ev.type === 'trader_visit') {
+        handleTraderVisit(db, worldId, next.day, next.phase)
+        db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, ?, 0, ?, ?)').run(
+          worldId,
+          next.day + 5,
+          ev.type,
+          ev.payload,
+        )
+      } else if (ev.type === 'road_washout') {
+        const factId = addFact(db, worldId, next.day, 'road_washout', {
+          description: 'дорога размыта, торговец задержится',
+        })
+        deliverNews(db, worldId, next.day, next.phase, 'путник', 'дорога размыта — торговец задержится', true, factId)
+      } else if (ev.type === 'rumor') {
+        deliverNews(db, worldId, next.day, next.phase, 'путник', 'говорят, сеньор отменит оброк', false, null)
       }
     }
 
@@ -553,6 +731,80 @@ export function consume(db: DatabaseSync, worldId: string, characterId: string, 
   return getWorldState(db, worldId)
 }
 
+export function trade(
+  db: DatabaseSync,
+  worldId: string,
+  characterId: string,
+  action: string,
+  resource: string,
+  amount: number,
+): WorldState {
+  const world = getWorld(db, worldId)
+  const chr = requireCharacter(db, worldId, characterId)
+  if (!Number.isInteger(amount) || amount <= 0) {
+    throw new RuleError(`количество должно быть положительным целым: ${amount}`)
+  }
+  const trader = getTrader(db, worldId)
+  if (!trader.present) {
+    throw new RuleError('торговца сейчас нет в деревне')
+  }
+
+  db.exec('BEGIN')
+  try {
+    if (action === 'sell') {
+      const price = BUY_PRICES[resource]
+      if (!price) throw new RuleError(`торговец не покупает «${resource}»`)
+      const have = stockOf(db, worldId, 'character', characterId, resource)
+      if (have < amount) throw new RuleError(`недостаточно «${resource}»: есть ${have}, требуется ${amount}`)
+      const coins = amount * price
+      if (trader.money < coins) throw new RuleError(`у торговца мало денег: есть ${trader.money}, нужно ${coins}`)
+
+      addStock(db, worldId, 'character', characterId, resource, -amount)
+      addStock(db, worldId, 'character', characterId, COIN, coins)
+      db.prepare('UPDATE trader SET money = money - ? WHERE world_id = ?').run(coins, worldId)
+      logEvent(db, worldId, world.day, world.phase, 'trade_sell', {
+        characterId,
+        characterName: chr.name,
+        resource,
+        amount,
+        coins,
+      })
+    } else if (action === 'buy') {
+      const price = SELL_PRICES[resource]
+      if (!price) throw new RuleError(`торговец не продаёт «${resource}»`)
+      const cost = amount * price
+      const coins = stockOf(db, worldId, 'character', characterId, COIN)
+      if (coins < cost) throw new RuleError(`недостаточно монет: есть ${coins}, нужно ${cost}`)
+
+      const traderStock = resource === 'зерно' ? trader.grain : resource === 'соль' ? trader.salt : 0
+      if (traderStock < amount) throw new RuleError(`у торговца мало «${resource}»: есть ${traderStock}`)
+
+      addStock(db, worldId, 'character', characterId, COIN, -cost)
+      addStock(db, worldId, 'character', characterId, resource, amount)
+      if (resource === 'зерно') {
+        db.prepare('UPDATE trader SET grain = grain - ? WHERE world_id = ?').run(amount, worldId)
+      } else {
+        db.prepare('UPDATE trader SET salt = salt - ? WHERE world_id = ?').run(amount, worldId)
+      }
+      logEvent(db, worldId, world.day, world.phase, 'trade_buy', {
+        characterId,
+        characterName: chr.name,
+        resource,
+        amount,
+        coins: cost,
+      })
+    } else {
+      throw new RuleError(`неизвестное действие торговли: ${action}`)
+    }
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+
+  return getWorldState(db, worldId)
+}
+
 interface RawEventRow {
   id: number
   world_id: string
@@ -576,6 +828,14 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
   const obligations = db
     .prepare('SELECT * FROM obligations WHERE world_id = ? ORDER BY due_day, id')
     .all(worldId) as unknown as ObligationRow[]
+
+  const facts = db.prepare('SELECT * FROM facts WHERE world_id = ? ORDER BY day, id').all(worldId) as unknown as Array<
+    Omit<FactRow, 'payload'> & { payload: string }
+  >
+  const knowledge = db.prepare('SELECT * FROM knowledge WHERE world_id = ? ORDER BY day, id').all(worldId) as unknown as Array<
+    Omit<KnowledgeRow, 'is_true'> & { is_true: number }
+  >
+  const trader = getTrader(db, worldId)
   const events = db
     .prepare('SELECT * FROM events WHERE world_id = ? ORDER BY day, phase, seq')
     .all(worldId) as unknown as RawEventRow[]
@@ -589,6 +849,9 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     stock,
     goals,
     obligations,
+    facts: facts.map((f) => ({ ...f, payload: JSON.parse(f.payload) as unknown })),
+    knowledge: knowledge.map((k) => ({ ...k, is_true: k.is_true === 1 })),
+    trader,
     events: events.map((e) => ({
       id: e.id,
       world_id: e.world_id,
