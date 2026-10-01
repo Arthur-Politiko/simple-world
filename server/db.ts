@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -45,7 +45,39 @@ function migrate(db: DatabaseSync): void {
       id TEXT NOT NULL,
       name TEXT NOT NULL,
       location_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      energy INTEGER NOT NULL,
+      household_id TEXT NOT NULL,
       PRIMARY KEY (world_id, id)
+    );
+
+    CREATE TABLE IF NOT EXISTS households (
+      world_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      location_id TEXT NOT NULL,
+      PRIMARY KEY (world_id, id)
+    );
+
+    CREATE TABLE IF NOT EXISTS goals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      world_id TEXT NOT NULL,
+      character_id TEXT NOT NULL,
+      description TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'active'
+    );
+
+    CREATE TABLE IF NOT EXISTS obligations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      world_id TEXT NOT NULL,
+      character_id TEXT NOT NULL,
+      recipient TEXT NOT NULL,
+      resource TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      due_day INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      settled_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS stock (

@@ -7,6 +7,7 @@ import {
   gather,
   getWorldState,
   moveCharacter,
+  runDays,
   RuleError,
 } from './world'
 
@@ -74,6 +75,11 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
       throw new RuleError('требуются characterId и resource')
     }
     return consume(db, req.params.id, characterId, resource, Number(amount))
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/run', async (req) => {
+    const { days } = (req.body ?? {}) as { days?: unknown }
+    return runDays(db, req.params.id, Number(days))
   })
 
   app.setErrorHandler((err, _req, reply) => {

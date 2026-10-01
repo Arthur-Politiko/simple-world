@@ -24,7 +24,10 @@ test('создание мира: сущности и начальное сост
   assert.equal(s.world.day, 1)
   assert.equal(s.phaseName, 'утро')
   assert.equal(s.locations.length, 5)
-  assert.equal(s.characters.length, 2)
+  assert.equal(s.characters.length, 6)
+  assert.equal(s.households.length, 3)
+  assert.ok(s.goals.length >= 4)
+  assert.ok(s.obligations.length >= 3)
   assert.ok(s.stock.length >= 4)
 })
 

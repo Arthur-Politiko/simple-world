@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { mulberry32, intRange } from './prng'
-import { advanceTime, phaseName } from './time'
+import { advanceTime, phaseName, PHASES } from './time'
 
 export interface WorldRow {
   id: string
@@ -13,17 +13,27 @@ export interface WorldRow {
 }
 
 export interface LocationRow {
-  id: string
   world_id: string
+  id: string
   name: string
   kind: string
 }
 
-export interface CharacterRow {
-  id: string
+export interface HouseholdRow {
   world_id: string
+  id: string
   name: string
   location_id: string
+}
+
+export interface CharacterRow {
+  world_id: string
+  id: string
+  name: string
+  location_id: string
+  role: string
+  energy: number
+  household_id: string
 }
 
 export interface StockRow {
@@ -32,6 +42,27 @@ export interface StockRow {
   holder_id: string
   resource: string
   quantity: number
+}
+
+export interface GoalRow {
+  id: number
+  world_id: string
+  character_id: string
+  description: string
+  priority: number
+  status: string
+}
+
+export interface ObligationRow {
+  id: number
+  world_id: string
+  character_id: string
+  recipient: string
+  resource: string
+  amount: number
+  due_day: number
+  status: string
+  settled_at: string | null
 }
 
 export interface EventRow {
@@ -49,8 +80,11 @@ export interface WorldState {
   world: WorldRow
   phaseName: string
   locations: LocationRow[]
+  households: HouseholdRow[]
   characters: CharacterRow[]
   stock: StockRow[]
+  goals: GoalRow[]
+  obligations: ObligationRow[]
   events: EventRow[]
 }
 
@@ -62,6 +96,25 @@ export class RuleError extends Error {
   }
 }
 
+export const MAX_ENERGY = 2
+export const FOOD_RESOURCE = 'зерно'
+
+const FORAGE_PHASE = 1 // фаза «день»
+const FORAGE_RESOURCE = 'ягоды'
+
+interface RoleDef {
+  title: string
+  produces: string
+  yieldPerWork: number
+}
+
+const ROLES: Record<string, RoleDef> = {
+  zemledelec: { title: 'земледелец', produces: 'зерно', yieldPerWork: 2 },
+  lesorub: { title: 'лесоруб', produces: 'дрова', yieldPerWork: 2 },
+  rybak: { title: 'рыбак', produces: 'рыба', yieldPerWork: 1 },
+  tkachiha: { title: 'ткачиха', produces: 'ткань', yieldPerWork: 1 },
+}
+
 const DEFAULT_LOCATIONS = [
   { id: 'loc-village', name: 'Деревня', kind: 'center' },
   { id: 'loc-field', name: 'Поле', kind: 'field' },
@@ -70,19 +123,45 @@ const DEFAULT_LOCATIONS = [
   { id: 'loc-inn', name: 'Постоялый двор', kind: 'inn' },
 ]
 
+const DEFAULT_HOUSEHOLDS = [
+  { id: 'hh-marta', name: 'Хозяйство Марты', locationId: 'loc-village' },
+  { id: 'hh-grzegorz', name: 'Хозяйство Гжегожа', locationId: 'loc-village' },
+  { id: 'hh-jan', name: 'Хозяйство Яна', locationId: 'loc-village' },
+]
+
 const DEFAULT_CHARACTERS = [
-  { id: 'chr-marta', name: 'Марта', locationId: 'loc-village' },
-  { id: 'chr-tomas', name: 'Томаш', locationId: 'loc-village' },
+  { id: 'chr-marta', name: 'Марта', locationId: 'loc-village', role: 'zemledelec', householdId: 'hh-marta' },
+  { id: 'chr-tomas', name: 'Томаш', locationId: 'loc-village', role: 'zemledelec', householdId: 'hh-marta' },
+  { id: 'chr-grzegorz', name: 'Гжегож', locationId: 'loc-village', role: 'lesorub', householdId: 'hh-grzegorz' },
+  { id: 'chr-kasya', name: 'Кася', locationId: 'loc-village', role: 'tkachiha', householdId: 'hh-grzegorz' },
+  { id: 'chr-jan', name: 'Ян', locationId: 'loc-village', role: 'rybak', householdId: 'hh-jan' },
+  { id: 'chr-staszek', name: 'Сташек', locationId: 'loc-village', role: 'zemledelec', householdId: 'hh-jan' },
 ]
 
 const INITIAL_STOCK = [
-  { holderType: 'character', holderId: 'chr-marta', resource: 'зерно', quantity: 5 },
+  { holderType: 'character', holderId: 'chr-marta', resource: 'зерно', quantity: 8 },
+  { holderType: 'character', holderId: 'chr-tomas', resource: 'зерно', quantity: 6 },
+  { holderType: 'character', holderId: 'chr-grzegorz', resource: 'зерно', quantity: 5 },
+  { holderType: 'character', holderId: 'chr-kasya', resource: 'зерно', quantity: 5 },
+  { holderType: 'character', holderId: 'chr-jan', resource: 'зерно', quantity: 5 },
+  { holderType: 'character', holderId: 'chr-staszek', resource: 'зерно', quantity: 6 },
+  { holderType: 'character', holderId: 'chr-grzegorz', resource: 'дрова', quantity: 4 },
   { holderType: 'character', holderId: 'chr-marta', resource: 'дрова', quantity: 3 },
-  { holderType: 'character', holderId: 'chr-tomas', resource: 'зерно', quantity: 4 },
-  { holderType: 'character', holderId: 'chr-tomas', resource: 'дрова', quantity: 2 },
+  { holderType: 'character', holderId: 'chr-tomas', resource: 'дрова', quantity: 3 },
 ]
 
-const FORAGE_PHASE = 1 // фаза «день»
+const DEFAULT_GOALS = [
+  { characterId: 'chr-marta', description: 'собрать урожай до заморозков', priority: 1 },
+  { characterId: 'chr-marta', description: 'выплатить оброк сеньору', priority: 2 },
+  { characterId: 'chr-grzegorz', description: 'заготовить дрова на зиму', priority: 1 },
+  { characterId: 'chr-jan', description: 'обеспечить семью рыбой', priority: 1 },
+]
+
+const DEFAULT_OBLIGATIONS = [
+  { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 7 },
+  { characterId: 'chr-grzegorz', recipient: 'сеньор', resource: 'дрова', amount: 10, dueDay: 7 },
+  { characterId: 'chr-tomas', recipient: 'сеньор', resource: 'зерно', amount: 10, dueDay: 10 },
+]
 
 function getWorld(db: DatabaseSync, worldId: string): WorldRow {
   const w = db.prepare('SELECT * FROM worlds WHERE id = ?').get(worldId) as WorldRow | undefined
@@ -152,6 +231,105 @@ function forageAmount(seed: number, day: number): number {
   return intRange(rng, 1, 5)
 }
 
+// ---------- автономная повседневная жизнь ----------
+
+function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const chars = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
+
+  for (const c of chars) {
+    if (phase === 0 || phase === 2) {
+      work(db, worldId, day, phase, c)
+    } else if (phase === 1) {
+      eat(db, worldId, day, phase, c)
+    } else if (phase === 3) {
+      sleep(db, worldId, day, phase, c)
+    }
+  }
+
+  if (phase === 3) {
+    settleObligations(db, worldId, day)
+  }
+}
+
+function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
+  const role = ROLES[c.role]
+  if (!role) return
+
+  if (c.energy < 1) {
+    logEvent(db, worldId, day, phase, 'rest', { characterId: c.id, characterName: c.name, reason: 'усталость' })
+    return
+  }
+
+  db.prepare('UPDATE characters SET energy = energy - 1 WHERE world_id = ? AND id = ?').run(worldId, c.id)
+  addStock(db, worldId, 'character', c.id, role.produces, role.yieldPerWork)
+  logEvent(db, worldId, day, phase, 'work', {
+    characterId: c.id,
+    characterName: c.name,
+    role: role.title,
+    resource: role.produces,
+    amount: role.yieldPerWork,
+  })
+}
+
+function eat(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
+  const have = stockOf(db, worldId, 'character', c.id, FOOD_RESOURCE)
+  if (have >= 1) {
+    addStock(db, worldId, 'character', c.id, FOOD_RESOURCE, -1)
+    logEvent(db, worldId, day, phase, 'eat', {
+      characterId: c.id,
+      characterName: c.name,
+      resource: FOOD_RESOURCE,
+      amount: 1,
+    })
+  } else {
+    logEvent(db, worldId, day, phase, 'hunger', { characterId: c.id, characterName: c.name })
+  }
+}
+
+function sleep(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
+  db.prepare('UPDATE characters SET energy = ? WHERE world_id = ? AND id = ?').run(MAX_ENERGY, worldId, c.id)
+  logEvent(db, worldId, day, phase, 'sleep', { characterId: c.id, characterName: c.name })
+}
+
+function settleObligations(db: DatabaseSync, worldId: string, day: number): void {
+  const pending = db
+    .prepare("SELECT * FROM obligations WHERE world_id = ? AND due_day <= ? AND status = 'pending'")
+    .all(worldId, day) as unknown as ObligationRow[]
+
+  for (const ob of pending) {
+    const have = stockOf(db, worldId, 'character', ob.character_id, ob.resource)
+    if (have >= ob.amount) {
+      addStock(db, worldId, 'character', ob.character_id, ob.resource, -ob.amount)
+      db.prepare("UPDATE obligations SET status = 'fulfilled', settled_at = ? WHERE id = ?").run(
+        new Date().toISOString(),
+        ob.id,
+      )
+      logEvent(db, worldId, day, 3, 'obligation_fulfilled', {
+        obligationId: ob.id,
+        characterId: ob.character_id,
+        recipient: ob.recipient,
+        resource: ob.resource,
+        amount: ob.amount,
+      })
+    } else {
+      db.prepare("UPDATE obligations SET status = 'failed', settled_at = ? WHERE id = ?").run(
+        new Date().toISOString(),
+        ob.id,
+      )
+      logEvent(db, worldId, day, 3, 'obligation_failed', {
+        obligationId: ob.id,
+        characterId: ob.character_id,
+        recipient: ob.recipient,
+        resource: ob.resource,
+        amount: ob.amount,
+        have,
+      })
+    }
+  }
+}
+
+// ---------- создание и продвижение мира ----------
+
 export function createWorld(db: DatabaseSync, name: string, seed: number): WorldState {
   const id = randomUUID()
   const now = new Date().toISOString()
@@ -166,20 +344,25 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
     )
 
     for (const loc of DEFAULT_LOCATIONS) {
-      db.prepare('INSERT INTO locations (id, world_id, name, kind) VALUES (?, ?, ?, ?)').run(
-        loc.id,
+      db.prepare('INSERT INTO locations (world_id, id, name, kind) VALUES (?, ?, ?, ?)').run(
         id,
+        loc.id,
         loc.name,
         loc.kind,
       )
     }
-    for (const chr of DEFAULT_CHARACTERS) {
-      db.prepare('INSERT INTO characters (id, world_id, name, location_id) VALUES (?, ?, ?, ?)').run(
-        chr.id,
+    for (const hh of DEFAULT_HOUSEHOLDS) {
+      db.prepare('INSERT INTO households (world_id, id, name, location_id) VALUES (?, ?, ?, ?)').run(
         id,
-        chr.name,
-        chr.locationId,
+        hh.id,
+        hh.name,
+        hh.locationId,
       )
+    }
+    for (const chr of DEFAULT_CHARACTERS) {
+      db.prepare(
+        'INSERT INTO characters (world_id, id, name, location_id, role, energy, household_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, chr.id, chr.name, chr.locationId, chr.role, MAX_ENERGY, chr.householdId)
     }
     for (const s of INITIAL_STOCK) {
       db.prepare('INSERT INTO stock (world_id, holder_type, holder_id, resource, quantity) VALUES (?, ?, ?, ?, ?)').run(
@@ -190,12 +373,25 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
         s.quantity,
       )
     }
+    for (const g of DEFAULT_GOALS) {
+      db.prepare('INSERT INTO goals (world_id, character_id, description, priority) VALUES (?, ?, ?, ?)').run(
+        id,
+        g.characterId,
+        g.description,
+        g.priority,
+      )
+    }
+    for (const o of DEFAULT_OBLIGATIONS) {
+      db.prepare(
+        'INSERT INTO obligations (world_id, character_id, recipient, resource, amount, due_day) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(id, o.characterId, o.recipient, o.resource, o.amount, o.dueDay)
+    }
 
     db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, 1, ?, ?, ?)').run(
       id,
       FORAGE_PHASE,
       'forage',
-      JSON.stringify({ resource: 'ягоды', locationId: 'loc-forest' }),
+      JSON.stringify({ resource: FORAGE_RESOURCE, locationId: 'loc-forest' }),
     )
 
     logEvent(db, id, 1, 0, 'world_created', { name, seed })
@@ -255,12 +451,26 @@ export function advancePhase(db: DatabaseSync, worldId: string): WorldState {
       }
     }
 
+    simulatePhase(db, worldId, next.day, next.phase)
+
     db.exec('COMMIT')
   } catch (e) {
     db.exec('ROLLBACK')
     throw e
   }
 
+  return getWorldState(db, worldId)
+}
+
+export function runDays(db: DatabaseSync, worldId: string, days: number): WorldState {
+  getWorld(db, worldId)
+  if (!Number.isInteger(days) || days <= 0) {
+    throw new RuleError(`число дней должно быть положительным целым: ${days}`)
+  }
+
+  for (let i = 0; i < days * PHASES.length; i++) {
+    advancePhase(db, worldId)
+  }
   return getWorldState(db, worldId)
 }
 
@@ -357,10 +567,15 @@ interface RawEventRow {
 export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
   const world = getWorld(db, worldId)
   const locations = db.prepare('SELECT * FROM locations WHERE world_id = ? ORDER BY id').all(worldId) as unknown as LocationRow[]
+  const households = db.prepare('SELECT * FROM households WHERE world_id = ? ORDER BY id').all(worldId) as unknown as HouseholdRow[]
   const characters = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
   const stock = db
     .prepare('SELECT * FROM stock WHERE world_id = ? ORDER BY holder_type, holder_id, resource')
     .all(worldId) as unknown as StockRow[]
+  const goals = db.prepare('SELECT * FROM goals WHERE world_id = ? ORDER BY id').all(worldId) as unknown as GoalRow[]
+  const obligations = db
+    .prepare('SELECT * FROM obligations WHERE world_id = ? ORDER BY due_day, id')
+    .all(worldId) as unknown as ObligationRow[]
   const events = db
     .prepare('SELECT * FROM events WHERE world_id = ? ORDER BY day, phase, seq')
     .all(worldId) as unknown as RawEventRow[]
@@ -369,8 +584,11 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     world,
     phaseName: phaseName(world.phase),
     locations,
+    households,
     characters,
     stock,
+    goals,
+    obligations,
     events: events.map((e) => ({
       id: e.id,
       world_id: e.world_id,
