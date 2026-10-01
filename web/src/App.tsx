@@ -78,13 +78,13 @@ interface CharacterMemory {
 interface WorldState {
   world: { id: string; name: string; seed: number; day: number; phase: number }
   phaseName: string
-  season: string
+  season?: string
   characters: Character[]
   locations: { id: string; name: string }[]
   households: { id: string; name: string }[]
-  plots: Plot[]
-  livestock: Livestock[]
-  hives: Hive[]
+  plots?: Plot[]
+  livestock?: Livestock[]
+  hives?: Hive[]
   stock: StockItem[]
   goals: Goal[]
   obligations: Obligation[]
@@ -361,7 +361,7 @@ export default function App() {
         <>
           <header style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
             <div>
-              <strong>День {world.world.day}</strong> · {world.season} · {world.phaseName} · seed {world.world.seed}
+              <strong>День {world.world.day}</strong> · {world.season ?? '—'} · {world.phaseName} · seed {world.world.seed}
             </div>
             <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
             <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
@@ -406,7 +406,7 @@ export default function App() {
           </table>
 
           <h2>Скот (особи)</h2>
-          {world.livestock.length === 0 ? (
+          {(world.livestock ?? []).length === 0 ? (
             <p>Скота нет.</p>
           ) : (
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -420,7 +420,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {world.livestock.map((l) => (
+                {(world.livestock ?? []).map((l) => (
                   <tr key={l.id}>
                     <td style={td}>{l.name ?? l.id}</td>
                     <td style={td}>{l.kind}</td>
@@ -435,10 +435,10 @@ export default function App() {
 
           <h2>Ульи</h2>
           <ul>
-            {world.hives.length === 0 ? (
+            {(world.hives ?? []).length === 0 ? (
               <li>Ульев нет.</li>
             ) : (
-              world.hives.map((h) => (
+              (world.hives ?? []).map((h) => (
                 <li key={h.id}>
                   {h.id} — {householdNameOf(h.household_id)}, сила {h.strength}
                 </li>
@@ -449,7 +449,7 @@ export default function App() {
           <h2>Наделы</h2>
           <ul>
             {world.households.map((hh) => {
-              const plots = world.plots.filter((p) => p.household_id === hh.id)
+              const plots = (world.plots ?? []).filter((p) => p.household_id === hh.id)
               return (
                 <li key={hh.id}>
                   <strong>{hh.name}</strong>:{' '}
