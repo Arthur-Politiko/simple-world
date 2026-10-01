@@ -3,7 +3,7 @@ import test from 'node:test'
 import { openDb } from '../server/db'
 import { chat, chatJSON } from '../server/llm'
 import { createWorld, getWorldState, moveCharacter, runDays } from '../server/world'
-import { seedCharacterCore, reflectOnEvent } from '../server/agent'
+import { chooseIntention, getDecisionChain, seedCharacterCore, reflectOnEvent, talkToCharacter } from '../server/agent'
 import { getLLMUsageSummary } from '../server/metrics'
 
 // Реальные вызовы выполняются только при RUN_LLM_TESTS=1, чтобы не тратить API в обычном прогоне.
@@ -72,4 +72,27 @@ test('вертикальный срез: два NPC по-разному рефл
   const usage = getLLMUsageSummary(db)
   assert.ok(usage.totals.calls >= 2)
   assert.ok(usage.totals.completionTokens > 0)
+})
+
+test('chooseIntention возвращает действие (реальный API)', { skip: !enabled }, async () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  seedCharacterCore(db, id, 'chr-marta', 'Земледелица, которой нужны дрова перед зимой.')
+
+  const result = await chooseIntention(db, id, 'chr-marta')
+  assert.ok(['executed', 'rejected'].includes(result.outcome))
+  assert.ok(result.intention.action)
+  // решение зафиксировано в цепочке
+  assert.ok(getDecisionChain(db, id, 'chr-marta').decisions.length >= 1)
+})
+
+test('talkToCharacter отвечает (реальный API)', { skip: !enabled }, async () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  seedCharacterCore(db, id, 'chr-marta', 'Осторожная земледелица, боится зимы.')
+
+  const { reply } = await talkToCharacter(db, id, 'chr-marta', 'Как дела?')
+  assert.ok(reply.length > 0)
 })

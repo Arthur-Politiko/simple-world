@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -165,6 +165,7 @@ function migrate(db: DatabaseSync): void {
 
   if (currentVersion <= 4) migrateV4ToV5(db)
   if (currentVersion <= 5) migrateV5ToV6(db)
+  if (currentVersion <= 6) migrateV6ToV7(db)
   assertSchemaVersion(db)
 }
 
@@ -285,6 +286,35 @@ function migrateV5ToV6(db: DatabaseSync): void {
         cache_hit_tokens INTEGER NOT NULL,
         cache_miss_tokens INTEGER NOT NULL,
         cost REAL,
+        created_at TEXT NOT NULL
+      );
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('6')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add the NPC decisions table for the decision chain. */
+function migrateV6ToV7(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        day INTEGER NOT NULL,
+        phase INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        target TEXT,
+        amount INTEGER,
+        reason TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        error TEXT,
+        memory_revision INTEGER NOT NULL,
         created_at TEXT NOT NULL
       );
     `)

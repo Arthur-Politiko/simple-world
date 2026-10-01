@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { DatabaseSync } from 'node:sqlite'
 import { applyReflectionProposal, exportCharacterMemoryMarkdown, getCharacterMemory } from './memory'
-import { reflectOnEvent } from './agent'
+import { chooseIntention, getDecisionChain, reflectOnEvent, talkToCharacter } from './agent'
 import { getLLMUsageSummary } from './metrics'
 import {
   advancePhase,
@@ -126,6 +126,22 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     const eid = Number(eventId)
     if (!Number.isInteger(eid)) throw new RuleError('требуется целочисленный eventId')
     return reflectOnEvent(db, req.params.id, characterId, eid)
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/intention', async (req) => {
+    const { characterId } = (req.body ?? {}) as { characterId?: unknown }
+    if (typeof characterId !== 'string') throw new RuleError('требуется characterId')
+    return chooseIntention(db, req.params.id, characterId)
+  })
+
+  app.post<{ Params: { id: string; characterId: string } }>('/api/worlds/:id/characters/:characterId/talk', async (req) => {
+    const { message } = (req.body ?? {}) as { message?: unknown }
+    if (typeof message !== 'string' || !message.trim()) throw new RuleError('требуется message')
+    return talkToCharacter(db, req.params.id, req.params.characterId, message)
+  })
+
+  app.get<{ Params: { id: string; characterId: string } }>('/api/worlds/:id/characters/:characterId/chain', async (req) => {
+    return getDecisionChain(db, req.params.id, req.params.characterId)
   })
 
   app.setErrorHandler((err, _req, reply) => {
