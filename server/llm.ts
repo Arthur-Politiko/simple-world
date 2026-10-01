@@ -115,6 +115,10 @@ function isRetryable(error: unknown): boolean {
   )
 }
 
+function isEmptyContent(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('пустой ответ')
+}
+
 async function doRequest(
   config: LLMConfig,
   model: string,
@@ -172,7 +176,13 @@ export async function chat(model: string, messages: ChatMessage[], options: Chat
       return await withConcurrency(() => doRequest(config, model, messages, options, timeoutMs))
     } catch (error) {
       lastError = error
-      if (!isRetryable(error) || attempt === maxRetries) throw error
+      const empty = isEmptyContent(error)
+      if (!isRetryable(error) && !empty) throw error
+      if (attempt === maxRetries) throw error
+      if (empty) {
+        // резонер израсходовал токены на рассуждение — дать больше бюджета и повторить
+        options = { ...options, maxTokens: (options.maxTokens ?? 1024) * 2 }
+      }
       await sleep(300 * (attempt + 1))
     }
   }

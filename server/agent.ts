@@ -345,7 +345,7 @@ export async function chooseIntention(
       { role: 'system', content: INTENTION_SYSTEM },
       { role: 'user', content: user },
     ],
-    { maxTokens: 1000, temperature: 0.7 },
+    { maxTokens: 2000, temperature: 0.7 },
   )
   recordLLMCall(db, 'intention', usage)
 
@@ -381,7 +381,7 @@ export async function talkToCharacter(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    { maxTokens: 1000, temperature: 0.8 },
+    { maxTokens: 2000, temperature: 0.8 },
   )
   recordLLMCall(db, 'dialogue', usage)
 
