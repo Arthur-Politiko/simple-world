@@ -6,9 +6,10 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { openDb, SCHEMA_VERSION } from '../server/db'
 
-test('существующая база v4 мигрирует в v5, сохраняя knowledge rows', () => {
+test('существующая база v4 мигрирует в v6 (через v5), сохраняя knowledge rows', () => {
   const dir = mkdtempSync(join(tmpdir(), 'village-memory-migration-'))
   const path = join(dir, 'legacy.db')
+  let migrated: DatabaseSync | null = null
   try {
     const legacy = new DatabaseSync(path)
     legacy.exec(`
@@ -29,19 +30,20 @@ test('существующая база v4 мигрирует в v5, сохра�
     `)
     legacy.close()
 
-    const migrated = openDb(path)
+    migrated = openDb(path)
     const version = migrated.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get() as { value: string }
     const row = migrated.prepare('SELECT * FROM knowledge').get() as Record<string, unknown>
     const columns = migrated.prepare('PRAGMA table_info(knowledge)').all() as Array<{ name: string }>
 
-    assert.equal(SCHEMA_VERSION, 5)
-    assert.equal(version.value, '5')
+    assert.equal(SCHEMA_VERSION, 6)
+    assert.equal(version.value, '6')
     assert.equal(row.summary, 'старое знание')
     assert.equal(row.event_id, null, 'legacy knowledge has no retroactively invented event link')
     assert.ok(columns.some((column) => column.name === 'event_id'))
     assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_revisions'").get())
-    migrated.close()
+    assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='llm_calls'").get())
   } finally {
+    if (migrated) migrated.close()
     rmSync(dir, { recursive: true, force: true })
   }
 })

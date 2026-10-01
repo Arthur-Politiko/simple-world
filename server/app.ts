@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { DatabaseSync } from 'node:sqlite'
 import { applyReflectionProposal, exportCharacterMemoryMarkdown, getCharacterMemory } from './memory'
+import { reflectOnEvent } from './agent'
+import { getLLMUsageSummary } from './metrics'
 import {
   advancePhase,
   consume,
@@ -112,6 +114,18 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
       throw new RuleError('требуются characterId, action и resource')
     }
     return trade(db, req.params.id, characterId, action, resource, Number(amount))
+  })
+
+  app.get('/api/metrics/llm', async () => {
+    return getLLMUsageSummary(db)
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/reflect', async (req) => {
+    const { characterId, eventId } = (req.body ?? {}) as { characterId?: unknown; eventId?: unknown }
+    if (typeof characterId !== 'string') throw new RuleError('требуется characterId')
+    const eid = Number(eventId)
+    if (!Number.isInteger(eid)) throw new RuleError('требуется целочисленный eventId')
+    return reflectOnEvent(db, req.params.id, characterId, eid)
   })
 
   app.setErrorHandler((err, _req, reply) => {

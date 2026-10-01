@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -151,23 +151,21 @@ function migrate(db: DatabaseSync): void {
     | { value: string }
     | undefined
 
+  let currentVersion: number
   if (!row) {
-    // The existing base schema is v4; install the additive v5 memory tables below.
+    // Базовая схема в CREATE выше — это v4; свежая БД начинается с v4.
     db.prepare("INSERT INTO schema_meta (key, value) VALUES ('schema_version', '4')").run()
-    migrateV4ToV5(db)
-    assertSchemaVersion(db)
+    currentVersion = 4
   } else {
-    const currentVersion = Number(row.value)
+    currentVersion = Number(row.value)
     if (!Number.isInteger(currentVersion) || currentVersion > SCHEMA_VERSION || currentVersion < 1) {
       throw new Error(`unsupported schema version: db=${row.value}, code=${SCHEMA_VERSION}`)
     }
-    if (currentVersion === 4) {
-      migrateV4ToV5(db)
-    } else if (currentVersion !== SCHEMA_VERSION) {
-      throw new Error(`schema version mismatch: db=${row.value}, code=${SCHEMA_VERSION}`)
-    }
-    assertSchemaVersion(db)
   }
+
+  if (currentVersion <= 4) migrateV4ToV5(db)
+  if (currentVersion <= 5) migrateV5ToV6(db)
+  assertSchemaVersion(db)
 }
 
 /** Add NPC memory and reflection-proposal tables without rewriting world state. */
@@ -262,6 +260,32 @@ function migrateV4ToV5(db: DatabaseSync): void {
         UNIQUE (world_id, character_id, proposal_id),
         FOREIGN KEY (world_id, character_id) REFERENCES characters(world_id, id),
         FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('5')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add the LLM usage/cost metrics table. */
+function migrateV5ToV6(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS llm_calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        model TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        prompt_tokens INTEGER NOT NULL,
+        completion_tokens INTEGER NOT NULL,
+        reasoning_tokens INTEGER NOT NULL,
+        cache_hit_tokens INTEGER NOT NULL,
+        cache_miss_tokens INTEGER NOT NULL,
+        cost REAL,
+        created_at TEXT NOT NULL
       );
     `)
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
