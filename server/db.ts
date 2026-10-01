@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -171,6 +171,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 9) migrateV9ToV10(db)
   if (currentVersion <= 10) migrateV10ToV11(db)
   if (currentVersion <= 11) migrateV11ToV12(db)
+  if (currentVersion <= 12) migrateV12ToV13(db)
   assertSchemaVersion(db)
 }
 
@@ -424,6 +425,46 @@ function migrateV11ToV12(db: DatabaseSync): void {
     if (!columns.some((c) => c.name === 'manure')) {
       db.exec('ALTER TABLE plots ADD COLUMN manure INTEGER')
     }
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('12')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Livestock as individuals (особи) instead of herd×count. */
+function migrateV12ToV13(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS livestock_new (
+        world_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        household_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT,
+        health INTEGER NOT NULL,
+        age INTEGER NOT NULL,
+        PRIMARY KEY (world_id, id)
+      );
+    `)
+    const rows = db
+      .prepare('SELECT world_id, household_id, kind, count, health FROM livestock')
+      .all() as Array<{ world_id: string; household_id: string; kind: string; count: number; health: number }>
+    for (const r of rows) {
+      for (let i = 0; i < r.count; i++) {
+        db.prepare('INSERT INTO livestock_new (world_id, id, household_id, kind, name, health, age) VALUES (?, ?, ?, ?, NULL, ?, 100)').run(
+          r.world_id,
+          `${r.kind}-${r.household_id}-${i + 1}`,
+          r.household_id,
+          r.kind,
+          r.health,
+        )
+      }
+    }
+    db.exec('DROP TABLE livestock')
+    db.exec('ALTER TABLE livestock_new RENAME TO livestock')
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
     db.exec('COMMIT')
   } catch (error) {

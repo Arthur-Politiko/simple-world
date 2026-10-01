@@ -62,3 +62,31 @@ test('скот даёт навоз, удобряющий поле', () => {
   const st = getWorldState(db, id)
   assert.ok(st.events.some((e) => e.type === 'manure'), 'скот даёт навоз')
 })
+
+test('скот — особи: у каждой своё состояние (имя, возраст)', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+
+  // 6 особей, а не 4 «стада»
+  assert.equal(s.livestock.length, 6)
+
+  const burёnka = s.livestock.find((l) => l.id === 'корова-бурёнка')
+  assert.ok(burёnka, 'корова-особь есть')
+  assert.equal(burёnka.name, 'Бурёнка')
+
+  // возрасты расходятся — это «жизнь», а не счётчик
+  const ages = new Set(s.livestock.map((l) => l.age))
+  assert.ok(ages.size > 1, 'возрасты особей различаются')
+})
+
+test('особь стареет со временем', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  const before = s.livestock.find((l) => l.id === 'корова-бурёнка')!.age
+
+  runDays(db, id, 3)
+  const st = getWorldState(db, id)
+  const after = st.livestock.find((l) => l.id === 'корова-бурёнка')!.age
+  assert.ok(after > before, 'корова стареет')
+})
