@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -174,6 +174,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 12) migrateV12ToV13(db)
   if (currentVersion <= 13) migrateV13ToV14(db)
   if (currentVersion <= 14) migrateV14ToV15(db)
+  if (currentVersion <= 15) migrateV15ToV16(db)
   assertSchemaVersion(db)
 }
 
@@ -513,6 +514,22 @@ function migrateV14ToV15(db: DatabaseSync): void {
         PRIMARY KEY (world_id, id)
       );
     `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('15')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add brain flag to dependents (deterministic zombie vs llm personality). */
+function migrateV15ToV16(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    const columns = db.prepare('PRAGMA table_info(dependents)').all() as Array<{ name: string }>
+    if (!columns.some((c) => c.name === 'brain')) {
+      db.exec("ALTER TABLE dependents ADD COLUMN brain TEXT NOT NULL DEFAULT 'deterministic'")
+    }
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
     db.exec('COMMIT')
   } catch (error) {

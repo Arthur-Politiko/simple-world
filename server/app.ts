@@ -15,6 +15,7 @@ import {
   gift,
   listWorlds,
   moveCharacter,
+  promoteDependent,
   runDays,
   trade,
   RuleError,
@@ -183,6 +184,11 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
   app.post<{ Params: IdParams }>('/api/worlds/:id/auto-stop', async (req) => {
     return stopAuto(req.params.id)
+  })
+
+  app.post<{ Params: { id: string; dependentId: string } }>('/api/worlds/:id/dependents/:dependentId/promote', async (req) => {
+    const { role } = (req.body ?? {}) as { role?: unknown }
+    return promoteDependent(db, req.params.id, req.params.dependentId, typeof role === 'string' ? role : 'работник')
   })
 
   app.get<{ Params: IdParams }>('/api/worlds/:id/auto', async (req) => {

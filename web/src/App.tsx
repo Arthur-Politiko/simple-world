@@ -307,6 +307,24 @@ export default function App() {
     }
   }, [world, selectedCharacterId])
 
+  const promoteDependent = useCallback(async (dependentId: string) => {
+    if (!world) return
+    setBusy(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/worlds/${world.world.id}/dependents/${dependentId}/promote`, { method: 'POST' })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      setWorld((await response.json()) as WorldState)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [world])
+
   const runAutonomous = useCallback(async () => {
     if (!world) return
     setBusy(true)
@@ -476,7 +494,19 @@ export default function App() {
               const deps = (world.dependents ?? []).filter((d) => d.household_id === hh.id)
               return (
                 <li key={hh.id}>
-                  <strong>{hh.name}</strong>: {deps.map((d) => `${d.name} (${d.relation}, ${d.age})`).join(', ') || '—'}
+                  <strong>{hh.name}</strong>
+                  {deps.length === 0 ? ' —' : (
+                    <ul>
+                      {deps.map((d) => (
+                        <li key={d.id}>
+                          {d.name} ({d.relation}, {d.age})
+                          <button onClick={() => void promoteDependent(d.id)} disabled={busy} style={{ marginLeft: '0.5rem' }}>
+                            ↗ в персонажа
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               )
             })}

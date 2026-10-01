@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { openDb } from '../server/db'
-import { createWorld, getWorldState, runDays } from '../server/world'
+import { createWorld, getWorldState, promoteDependent, runDays } from '../server/world'
 
 test('у дворов есть домочадцы (зомби-NPC без LLM)', () => {
   const db = openDb(':memory:')
@@ -39,4 +39,18 @@ test('домочадцы едят (рты) — потребляют еду из 
   const st = getWorldState(db, id)
   // домочадцы ели; проверим, что в деревне в целом не случилось голода у домочадцев
   assert.ok(!st.events.some((e) => e.type === 'dependent_hunger'), 'домочадцы не голодали за неделю')
+})
+
+test('домочадца можно повысить в персонажа (зомби → LLM)', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  const depsBefore = s.dependents.length
+  const charsBefore = s.characters.length
+
+  const st = promoteDependent(db, id, 'dep-gridya')
+  assert.equal(st.dependents.length, depsBefore - 1, 'домочадец удалён')
+  assert.equal(st.characters.length, charsBefore + 1, 'персонаж создан')
+  assert.ok(st.characters.some((c) => c.id === 'chr-gridya'), 'Гридя стал персонажем')
+  assert.ok(st.events.some((e) => e.type === 'dependent_promoted'), 'событие повышения записано')
 })

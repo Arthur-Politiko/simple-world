@@ -142,6 +142,7 @@ export interface DependentRow {
   age: number
   relation: string
   labor: number
+  brain: string
 }
 
 export interface WorldState {
@@ -238,6 +239,7 @@ const ROLES: Record<string, RoleDef> = {
   rybak: { title: 'рыбак', grainYield: 1, specialty: { resource: 'рыба', amount: 1 } },
   tkachiha: { title: 'ткачиха', grainYield: 1, specialty: { resource: 'ткань', amount: 1 } },
   traktirschik: { title: 'трактирщик', grainYield: 1 },
+  работник: { title: 'работник', grainYield: 1 },
 }
 
 const DEFAULT_LOCATIONS = [
@@ -1413,6 +1415,35 @@ export function gift(db: DatabaseSync, worldId: string, characterId: string, res
       amount,
       source: 'player',
     })
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+
+  return getWorldState(db, worldId)
+}
+
+/** Повысить домочадца в персонажа (зомби-NPC → LLM-личность). */
+export function promoteDependent(db: DatabaseSync, worldId: string, dependentId: string, role = 'работник'): WorldState {
+  const dep = db
+    .prepare('SELECT * FROM dependents WHERE world_id = ? AND id = ?')
+    .get(worldId, dependentId) as unknown as DependentRow | undefined
+  if (!dep) throw new RuleError(`домочадец не найден: ${dependentId}`)
+
+  const world = getWorld(db, worldId)
+  const household = db
+    .prepare('SELECT location_id FROM households WHERE world_id = ? AND id = ?')
+    .get(worldId, dep.household_id) as { location_id: string } | undefined
+  const characterId = 'chr-' + dep.id.replace(/^dep-/, '')
+
+  db.exec('BEGIN')
+  try {
+    db.prepare(
+      'INSERT INTO characters (world_id, id, name, location_id, role, energy, household_id, health) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(worldId, characterId, dep.name, household?.location_id ?? 'loc-inn', role, MAX_ENERGY, dep.household_id, 100)
+    db.prepare('DELETE FROM dependents WHERE world_id = ? AND id = ?').run(worldId, dependentId)
+    logEvent(db, worldId, world.day, world.phase, 'dependent_promoted', { dependentId, name: dep.name, characterId, role })
     db.exec('COMMIT')
   } catch (e) {
     db.exec('ROLLBACK')
