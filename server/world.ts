@@ -156,10 +156,10 @@ const FORAGE_PHASE = 1 // фаза «день»
 const FORAGE_RESOURCE = 'ягоды'
 // распределение зерна по наделам дворов: у земледельцев поле больше
 const FIELD_HARVEST: Record<string, number> = {
-  'hh-marta': 40,
+  'hh-marta': 30,
   'hh-jan': 25,
-  'hh-grzegorz': 10,
-  'hh-inn': 5,
+  'hh-grzegorz': 20,
+  'hh-inn': 10,
 }
 // скот: корм (зерно в день), продукт, тяга
 // скот: корм (сено в день), продукт, тяга
@@ -182,16 +182,16 @@ const SELL_PRICES: Record<string, number> = { зерно: 2, соль: 2 }
 
 interface RoleDef {
   title: string
-  produces: string
-  yieldPerWork: number
+  grainYield: number
+  specialty?: { resource: string; amount: number }
 }
 
 const ROLES: Record<string, RoleDef> = {
-  zemledelec: { title: 'земледелец', produces: 'зерно', yieldPerWork: 2 },
-  lesorub: { title: 'лесоруб', produces: 'дрова', yieldPerWork: 2 },
-  rybak: { title: 'рыбак', produces: 'рыба', yieldPerWork: 1 },
-  tkachiha: { title: 'ткачиха', produces: 'ткань', yieldPerWork: 1 },
-  traktirschik: { title: 'трактирщик', produces: '', yieldPerWork: 0 },
+  zemledelec: { title: 'земледелец', grainYield: 2 },
+  lesorub: { title: 'лесоруб', grainYield: 1, specialty: { resource: 'дрова', amount: 1 } },
+  rybak: { title: 'рыбак', grainYield: 1, specialty: { resource: 'рыба', amount: 1 } },
+  tkachiha: { title: 'ткачиха', grainYield: 1, specialty: { resource: 'ткань', amount: 1 } },
+  traktirschik: { title: 'трактирщик', grainYield: 1 },
 }
 
 const DEFAULT_LOCATIONS = [
@@ -513,7 +513,7 @@ function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: nu
 
 function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
   const role = ROLES[c.role]
-  if (!role || role.yieldPerWork <= 0) return
+  if (!role) return
 
   if (c.health < SICK_THRESHOLD) {
     logEvent(db, worldId, day, phase, 'sick', { characterId: c.id, characterName: c.name })
@@ -524,28 +524,47 @@ function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: 
     return
   }
 
-  let amount = role.yieldPerWork
-  if (role.produces === 'зерно') {
-    // тяга вола увеличивает сбор
+  // базовое пропитание: зерно с надела двора (у всех, у земледельца больше)
+  if (role.grainYield > 0) {
+    let grain = role.grainYield
     const hasOx = db
       .prepare("SELECT 1 FROM livestock WHERE world_id = ? AND household_id = ? AND kind = 'вол' AND count > 0 AND health >= 40")
       .get(worldId, c.household_id)
-    if (hasOx) amount += 1
-    // сбор ограничен остатком урожая на наделе двора
+    if (hasOx) grain += 1
     const plot = db
       .prepare("SELECT harvest FROM plots WHERE world_id = ? AND household_id = ? AND kind = 'поле'")
       .get(worldId, c.household_id) as { harvest: number | null } | undefined
     const pool = plot?.harvest ?? 0
     if (pool <= 0) {
       logEvent(db, worldId, day, phase, 'field_empty', { characterId: c.id, characterName: c.name, householdId: c.household_id })
-      return
+    } else {
+      grain = Math.min(grain, pool)
+      db.prepare("UPDATE plots SET harvest = harvest - ? WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(
+        grain,
+        worldId,
+        c.household_id,
+      )
+      addStock(db, worldId, 'character', c.id, 'зерно', grain)
+      logEvent(db, worldId, day, phase, 'work', {
+        characterId: c.id,
+        characterName: c.name,
+        role: role.title,
+        resource: 'зерно',
+        amount: grain,
+      })
     }
-    amount = Math.min(amount, pool)
-    db.prepare("UPDATE plots SET harvest = harvest - ? WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(
-      amount,
-      worldId,
-      c.household_id,
-    )
+  }
+
+  // вторичное ремесло
+  if (role.specialty) {
+    addStock(db, worldId, 'character', c.id, role.specialty.resource, role.specialty.amount)
+    logEvent(db, worldId, day, phase, 'work', {
+      characterId: c.id,
+      characterName: c.name,
+      role: role.title,
+      resource: role.specialty.resource,
+      amount: role.specialty.amount,
+    })
   }
 
   const newEnergy = c.energy - 1
@@ -554,14 +573,6 @@ function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: 
     db.prepare('UPDATE characters SET health = MAX(0, health - 10) WHERE world_id = ? AND id = ?').run(worldId, c.id)
     logEvent(db, worldId, day, phase, 'overwork', { characterId: c.id, characterName: c.name })
   }
-  addStock(db, worldId, 'character', c.id, role.produces, amount)
-  logEvent(db, worldId, day, phase, 'work', {
-    characterId: c.id,
-    characterName: c.name,
-    role: role.title,
-    resource: role.produces,
-    amount,
-  })
 }
 
 function eat(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
@@ -767,8 +778,8 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
       )
     }
     for (const hh of DEFAULT_HOUSEHOLDS) {
-      // огород — добавка; луг — сено для скота; поле — зерно (у земледельцев больше)
-      db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 3)
+      // огород — добавка/страховка; луг — сено для скота; поле — зерно (база, у земледельцев больше)
+      db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 2)
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'луг', ?)").run(id, hh.id, 5)
       const grain = FIELD_HARVEST[hh.id] ?? 8
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest) VALUES (?, ?, 'поле', ?, ?)").run(id, hh.id, grain, grain)

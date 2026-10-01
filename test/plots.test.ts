@@ -23,3 +23,28 @@ test('огород кормит не-земледельцев — ткачиха
   )
   assert.equal(kasyaHunger, false, 'ткачиха не должна голодать')
 })
+
+test('не-земледелец тоже собирает зерно (база — зерно, не овощи)', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+
+  runDays(db, id, 2)
+  const st = getWorldState(db, id)
+
+  const kasyaGrain = st.events.some(
+    (e) =>
+      e.type === 'work' &&
+      (e.payload as { characterId?: string }).characterId === 'chr-kasya' &&
+      (e.payload as { resource?: string }).resource === 'зерно',
+  )
+  assert.ok(kasyaGrain, 'ткачиха собирает зерно')
+
+  const kasyaCloth = st.events.some(
+    (e) =>
+      e.type === 'work' &&
+      (e.payload as { characterId?: string }).characterId === 'chr-kasya' &&
+      (e.payload as { resource?: string }).resource === 'ткань',
+  )
+  assert.ok(kasyaCloth, 'ткачиха ткёт как вторичное ремесло')
+})
