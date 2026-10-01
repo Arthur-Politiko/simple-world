@@ -89,17 +89,19 @@ test('покупка ограничена товаром торговца', () =
   assert.throws(() => trade(db, id, 'chr-marta', 'buy', 'зерно', 21), RuleError)
 })
 
-test('урожай на поле конечен и исчерпывается', () => {
+test('зерно на наделах конечно и исчерпывается', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
-  assert.equal(qty(s, 'loc-field', 'урожай'), 80)
+  assert.equal(s.plots.filter((p) => p.kind === 'поле').length, s.households.length)
 
   runDays(db, id, 20)
 
   const st = getWorldState(db, id)
-  assert.equal(qty(st, 'loc-field', 'урожай'), 0)
   assert.ok(st.events.some((e) => e.type === 'field_empty'), 'после исчерпания урожая работа на поле невозможна')
+  for (const p of st.plots.filter((p) => p.kind === 'поле')) {
+    assert.ok((p.harvest ?? 0) >= 0, 'остаток урожая не может быть отрицательным')
+  }
 })
 
 test('конфликт: зерно идёт на еду или на платёж, но не на всё сразу', () => {
@@ -107,8 +109,8 @@ test('конфликт: зерно идёт на еду или на платёж
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
 
-  // имитируем неурожай: поле пусто
-  db.prepare("UPDATE stock SET quantity = 0 WHERE holder_type = 'location' AND holder_id = 'loc-field' AND resource = 'урожай'").run()
+  // имитируем неурожай: поля пусты
+  db.prepare("UPDATE plots SET harvest = 0 WHERE kind = 'поле'").run()
 
   runDays(db, id, 20)
 

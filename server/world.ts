@@ -142,8 +142,13 @@ export const FOOD_RESOURCES = ['зерно', 'рыба', 'овощи'] as const
 
 const FORAGE_PHASE = 1 // фаза «день»
 const FORAGE_RESOURCE = 'ягоды'
-const FIELD_LOCATION = 'loc-field'
-const HARVEST_RESOURCE = 'урожай'
+// распределение зерна по наделам дворов: у земледельцев поле больше
+const FIELD_HARVEST: Record<string, number> = {
+  'hh-marta': 40,
+  'hh-jan': 25,
+  'hh-grzegorz': 10,
+  'hh-inn': 5,
+}
 const COIN = 'монеты'
 
 const TRADER_MONEY = 40
@@ -211,7 +216,6 @@ const INITIAL_STOCK = [
   { holderType: 'character', holderId: 'chr-grzegorz', resource: 'монеты', quantity: 6 },
   { holderType: 'character', holderId: 'chr-jan', resource: 'монеты', quantity: 6 },
   { holderType: 'character', holderId: 'chr-tomek', resource: 'монеты', quantity: 5 },
-  { holderType: 'location', holderId: 'loc-field', resource: HARVEST_RESOURCE, quantity: 80 },
 ]
 
 const DEFAULT_GOALS = [
@@ -403,14 +407,21 @@ function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: 
 
   let amount = role.yieldPerWork
   if (role.produces === 'зерно') {
-    // сбор ограничен остатком урожая на поле
-    const pool = stockOf(db, worldId, 'location', FIELD_LOCATION, HARVEST_RESOURCE)
+    // сбор ограничен остатком урожая на наделе двора
+    const plot = db
+      .prepare("SELECT harvest FROM plots WHERE world_id = ? AND household_id = ? AND kind = 'поле'")
+      .get(worldId, c.household_id) as { harvest: number | null } | undefined
+    const pool = plot?.harvest ?? 0
     if (pool <= 0) {
-      logEvent(db, worldId, day, phase, 'field_empty', { characterId: c.id, characterName: c.name })
+      logEvent(db, worldId, day, phase, 'field_empty', { characterId: c.id, characterName: c.name, householdId: c.household_id })
       return
     }
     amount = Math.min(amount, pool)
-    addStock(db, worldId, 'location', FIELD_LOCATION, HARVEST_RESOURCE, -amount)
+    db.prepare("UPDATE plots SET harvest = harvest - ? WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(
+      amount,
+      worldId,
+      c.household_id,
+    )
   }
 
   db.prepare('UPDATE characters SET energy = energy - 1 WHERE world_id = ? AND id = ?').run(worldId, c.id)
@@ -547,8 +558,11 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
       )
     }
     for (const hh of DEFAULT_HOUSEHOLDS) {
-      // огород — базовое пропитание каждого двора; поле добавится в следующем подэтапе
+      // огород — базовое пропитание каждого двора
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 3)
+      // поле — зерно; у земледельцев поле больше
+      const grain = FIELD_HARVEST[hh.id] ?? 8
+      db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest) VALUES (?, ?, 'поле', ?, ?)").run(id, hh.id, grain, grain)
     }
     for (const chr of DEFAULT_CHARACTERS) {
       db.prepare(
