@@ -6,6 +6,7 @@ interface Character {
   role: string
   location_id: string
   energy: number
+  health: number
   household_id: string
 }
 
@@ -14,6 +15,24 @@ interface StockItem {
   holder_id: string
   resource: string
   quantity: number
+}
+
+interface Plot {
+  household_id: string
+  kind: string
+  size: number
+  harvest: number | null
+  sown: number | null
+  manure: number | null
+}
+
+interface Livestock {
+  id: string
+  household_id: string
+  kind: string
+  name: string | null
+  health: number
+  age: number
 }
 
 interface Obligation {
@@ -53,9 +72,12 @@ interface CharacterMemory {
 interface WorldState {
   world: { id: string; name: string; seed: number; day: number; phase: number }
   phaseName: string
+  season: string
   characters: Character[]
   locations: { id: string; name: string }[]
   households: { id: string; name: string }[]
+  plots: Plot[]
+  livestock: Livestock[]
   stock: StockItem[]
   goals: Goal[]
   obligations: Obligation[]
@@ -160,6 +182,7 @@ export default function App() {
 
   const nameOf = (id: string) => world?.characters.find((c) => c.id === id)?.name ?? id
   const locationOf = (id: string) => world?.locations.find((l) => l.id === id)?.name ?? id
+  const householdNameOf = (id: string) => world?.households.find((h) => h.id === id)?.name ?? id
 
   const loadMemory = useCallback(async (characterId: string) => {
     if (!world) return
@@ -305,7 +328,7 @@ export default function App() {
         <>
           <header style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
             <div>
-              <strong>День {world.world.day}</strong> · {world.phaseName} · seed {world.world.seed}
+              <strong>День {world.world.day}</strong> · {world.season} · {world.phaseName} · seed {world.world.seed}
             </div>
             <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
             <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
@@ -323,6 +346,7 @@ export default function App() {
                 <th style={th}>Роль</th>
                 <th style={th}>Локация</th>
                 <th style={th}>Сил</th>
+                <th style={th}>Здор.</th>
                 {mode === 'debug' && <th style={th}>Память</th>}
               </tr>
             </thead>
@@ -333,6 +357,7 @@ export default function App() {
                   <td style={td}>{ROLE_TITLES[c.role] ?? c.role}</td>
                   <td style={td}>{locationOf(c.location_id)}</td>
                   <td style={td}>{c.energy}</td>
+                  <td style={td}>{c.health}</td>
                   {mode === 'debug' && (
                     <td style={td}>
                       <button onClick={() => loadMemory(c.id)} disabled={busy}>
@@ -344,6 +369,55 @@ export default function App() {
               ))}
             </tbody>
           </table>
+
+          <h2>Скот (особи)</h2>
+          {world.livestock.length === 0 ? (
+            <p>Скота нет.</p>
+          ) : (
+            <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+              <thead>
+                <tr>
+                  <th style={th}>Особь</th>
+                  <th style={th}>Вид</th>
+                  <th style={th}>Двор</th>
+                  <th style={th}>Здоровье</th>
+                  <th style={th}>Возраст</th>
+                </tr>
+              </thead>
+              <tbody>
+                {world.livestock.map((l) => (
+                  <tr key={l.id}>
+                    <td style={td}>{l.name ?? l.id}</td>
+                    <td style={td}>{l.kind}</td>
+                    <td style={td}>{householdNameOf(l.household_id)}</td>
+                    <td style={td}>{l.health}</td>
+                    <td style={td}>{l.age}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <h2>Наделы</h2>
+          <ul>
+            {world.households.map((hh) => {
+              const plots = world.plots.filter((p) => p.household_id === hh.id)
+              return (
+                <li key={hh.id}>
+                  <strong>{hh.name}</strong>:{' '}
+                  {plots
+                    .map((p) => {
+                      const parts = [`${p.kind} ${p.size}`]
+                      if (p.harvest !== null) parts.push(`урожай ${p.harvest}`)
+                      if (p.sown !== null) parts.push(`посев ${p.sown}`)
+                      if (p.manure !== null) parts.push(`навоз ${p.manure}`)
+                      return parts.join(' / ')
+                    })
+                    .join('; ') || 'наделов нет'}
+                </li>
+              )
+            })}
+          </ul>
 
           {selectedCharacterId && (
             <section style={{ marginTop: '1.5rem', border: '1px solid #ddd', borderRadius: 8, padding: '1rem' }}>

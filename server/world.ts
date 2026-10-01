@@ -129,6 +129,7 @@ export interface LivestockRow {
 export interface WorldState {
   world: WorldRow
   phaseName: string
+  season: string
   locations: LocationRow[]
   households: HouseholdRow[]
   plots: PlotRow[]
@@ -1217,6 +1218,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
   return {
     world,
     phaseName: phaseName(world.phase),
+    season: seasonOfDay(world.day),
     locations,
     households,
     plots,
