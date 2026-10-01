@@ -112,6 +112,8 @@ export interface PlotRow {
   kind: string
   size: number
   harvest: number | null
+  sown: number | null
+  manure: number | null
 }
 
 export interface LivestockRow {
@@ -151,10 +153,25 @@ export const MAX_ENERGY = 2
 const MIN_ENERGY = -2
 const SICK_THRESHOLD = 20
 const REST_DAY_INTERVAL = 7
+const DAYS_PER_SEASON = 7
+const SEASON_NAMES = ['весна', 'лето', 'осень', 'зима'] as const
+const SEED_RETURN = 3 // «сам-три»: 1 посеянное зерно → 3 урожая
 export const FOOD_RESOURCES = ['зерно', 'рыба', 'овощи'] as const
 
 function isRestDay(day: number): boolean {
   return day > 0 && day % REST_DAY_INTERVAL === 0
+}
+
+function seasonIndex(day: number): number {
+  return Math.floor((day - 1) / DAYS_PER_SEASON) % SEASON_NAMES.length
+}
+
+function seasonOfDay(day: number): (typeof SEASON_NAMES)[number] {
+  return SEASON_NAMES[seasonIndex(day)]
+}
+
+function isSeasonStart(day: number): boolean {
+  return (day - 1) % DAYS_PER_SEASON === 0
 }
 
 const FORAGE_PHASE = 1 // фаза «день»
@@ -380,8 +397,17 @@ function forageAmount(seed: number, day: number): number {
 
 function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   if (phase === 0) {
-    producePlotResource(db, worldId, day, phase, 'огород', 'овощи', 'garden_harvest')
-    producePlotResource(db, worldId, day, phase, 'луг', 'сено', 'hay_harvest')
+    // сезонные события: посев весной, жатва осенью
+    if (isSeasonStart(day)) {
+      const season = seasonOfDay(day)
+      if (season === 'весна') sowFields(db, worldId, day, phase)
+      if (season === 'осень') harvestFields(db, worldId, day, phase)
+    }
+    // огород/луг не плодоносят зимой
+    if (seasonOfDay(day) !== 'зима') {
+      producePlotResource(db, worldId, day, phase, 'огород', 'овощи', 'garden_harvest')
+      producePlotResource(db, worldId, day, phase, 'луг', 'сено', 'hay_harvest')
+    }
     tickLivestock(db, worldId, day, phase)
   }
 
@@ -499,9 +525,9 @@ function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: nu
       logEvent(db, worldId, day, phase, 'livestock_produce', { householdId: lv.household_id, kind: lv.kind, resource: spec.product, amount })
     }
 
-    // навоз → удобрение поля двора (+1 зерно к урожаю за голову)
+    // навоз → удобрение поля (копит плодородие к осени, а не отдаёт зерно сразу)
     if (health >= 40) {
-      db.prepare("UPDATE plots SET harvest = harvest + ? WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(lv.count, worldId, lv.household_id)
+      db.prepare("UPDATE plots SET manure = manure + ? WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(lv.count, worldId, lv.household_id)
       logEvent(db, worldId, day, phase, 'manure', { householdId: lv.household_id, amount: lv.count })
     }
 
@@ -524,6 +550,48 @@ function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: nu
 function restDay(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
   db.prepare('UPDATE characters SET health = MIN(100, health + 5) WHERE world_id = ? AND id = ?').run(worldId, c.id)
   logEvent(db, worldId, day, phase, 'rest_day', { characterId: c.id, characterName: c.name })
+}
+
+/** Весенний посев: двор тратит зерно на семена (цель — размер поля / 3). */
+function sowFields(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const fields = db
+    .prepare("SELECT household_id, size FROM plots WHERE world_id = ? AND kind = 'поле'")
+    .all(worldId) as unknown as Array<{ household_id: string; size: number }>
+
+  for (const field of fields) {
+    const target = Math.floor(field.size / SEED_RETURN)
+    if (target <= 0) continue
+    const sown = consumeFromHousehold(db, worldId, field.household_id, 'зерно', target)
+    if (sown > 0) {
+      db.prepare("UPDATE plots SET sown = ? WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(sown, worldId, field.household_id)
+      logEvent(db, worldId, day, phase, 'sow', { householdId: field.household_id, amount: sown })
+    } else {
+      logEvent(db, worldId, day, phase, 'sow_failed', { householdId: field.household_id })
+    }
+  }
+}
+
+/** Осенняя жатва: урожай = посев × 3 («сам-три») + навоз. Без посева урожая нет. */
+function harvestFields(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const fields = db
+    .prepare("SELECT household_id, sown, manure FROM plots WHERE world_id = ? AND kind = 'поле'")
+    .all(worldId) as unknown as Array<{ household_id: string; sown: number | null; manure: number | null }>
+
+  for (const field of fields) {
+    const sown = field.sown ?? 0
+    const manure = field.manure ?? 0
+    if (sown > 0) {
+      const harvest = sown * SEED_RETURN + manure
+      db.prepare("UPDATE plots SET harvest = harvest + ?, sown = 0, manure = 0 WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(
+        harvest,
+        worldId,
+        field.household_id,
+      )
+      logEvent(db, worldId, day, phase, 'harvest', { householdId: field.household_id, amount: harvest })
+    } else {
+      logEvent(db, worldId, day, phase, 'harvest_failed', { householdId: field.household_id })
+    }
+  }
 }
 
 function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
@@ -797,7 +865,7 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 2)
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'луг', ?)").run(id, hh.id, 5)
       const grain = FIELD_HARVEST[hh.id] ?? 8
-      db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest) VALUES (?, ?, 'поле', ?, ?)").run(id, hh.id, grain, grain)
+      db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest, sown, manure) VALUES (?, ?, 'поле', ?, 0, 0, 0)").run(id, hh.id, grain)
     }
     for (const lv of INITIAL_LIVESTOCK) {
       db.prepare('INSERT INTO livestock (world_id, household_id, kind, count, health) VALUES (?, ?, ?, ?, 100)').run(id, lv.householdId, lv.kind, lv.count)
@@ -816,6 +884,8 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
         s.quantity,
       )
     }
+    // начальный посев (день 1 — весна)
+    sowFields(db, id, 1, 0)
     for (const g of DEFAULT_GOALS) {
       db.prepare('INSERT INTO goals (world_id, character_id, description, priority) VALUES (?, ?, ?, ?)').run(
         id,

@@ -36,6 +36,8 @@ test('сон восстанавливает здоровье', () => {
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
   db.prepare("UPDATE characters SET health = 50 WHERE world_id = ? AND id = 'chr-marta'").run(id)
+  // дать еды, чтобы на день 1 (после посева) не голодала
+  db.prepare("INSERT INTO stock (world_id, holder_type, holder_id, resource, quantity) VALUES (?, 'character', 'chr-marta', 'овощи', 5)").run(id)
 
   advancePhase(db, id) // день
   advancePhase(db, id) // вечер

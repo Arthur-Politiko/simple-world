@@ -26,7 +26,7 @@ test('вол увеличивает сбор зерна (тяга)', () => {
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
 
-  runDays(db, id, 1)
+  runDays(db, id, 15)
   const st = getWorldState(db, id)
   const martaWork = st.events.find(
     (e) =>

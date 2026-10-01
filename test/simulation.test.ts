@@ -11,16 +11,15 @@ test('деревня живёт две недели без игрока', () => 
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
-  const grainBefore = sumResource(s, 'зерно')
 
   const end = runDays(db, id, 14)
 
   assert.equal(end.world.day, 15)
   assert.equal(end.phaseName, 'утро')
 
-  // запасы меняются по понятным причинам (поле/еда)
-  const grainAfter = sumResource(end, 'зерно')
-  assert.notEqual(grainAfter, grainBefore)
+  // экономика живёт: посев и жатва случились
+  assert.ok(end.events.some((e) => e.type === 'sow'), 'посев случился')
+  assert.ok(end.events.some((e) => e.type === 'harvest'), 'жатва случилась')
 
   // журнал объясняет жизнь: есть работа, еда, сон
   const types = new Set(end.events.map((e) => e.type))

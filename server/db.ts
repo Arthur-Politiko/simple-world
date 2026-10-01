@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -170,6 +170,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 8) migrateV8ToV9(db)
   if (currentVersion <= 9) migrateV9ToV10(db)
   if (currentVersion <= 10) migrateV10ToV11(db)
+  if (currentVersion <= 11) migrateV11ToV12(db)
   assertSchemaVersion(db)
 }
 
@@ -403,6 +404,25 @@ function migrateV10ToV11(db: DatabaseSync): void {
     const columns = db.prepare('PRAGMA table_info(characters)').all() as Array<{ name: string }>
     if (!columns.some((c) => c.name === 'health')) {
       db.exec('ALTER TABLE characters ADD COLUMN health INTEGER NOT NULL DEFAULT 100')
+    }
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('11')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add sown (посев) to plots for the yearly cycle. */
+function migrateV11ToV12(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    const columns = db.prepare('PRAGMA table_info(plots)').all() as Array<{ name: string }>
+    if (!columns.some((c) => c.name === 'sown')) {
+      db.exec('ALTER TABLE plots ADD COLUMN sown INTEGER')
+    }
+    if (!columns.some((c) => c.name === 'manure')) {
+      db.exec('ALTER TABLE plots ADD COLUMN manure INTEGER')
     }
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
     db.exec('COMMIT')

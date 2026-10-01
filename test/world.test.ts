@@ -104,19 +104,20 @@ test('зерно на наделах конечно и исчерпываетс�
   }
 })
 
-test('конфликт: зерно идёт на еду или на платёж, но не на всё сразу', () => {
+test('провал посева: нет зерна → нет урожая → оброк провален', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
 
-  // имитируем неурожай: поля пусты
-  db.prepare("UPDATE plots SET harvest = 0 WHERE kind = 'поле'").run()
+  // имитируем неурожай: забрать зерно и отменить посев
+  db.prepare("DELETE FROM stock WHERE holder_type = 'character' AND resource = 'зерно'").run()
+  db.prepare("UPDATE plots SET sown = 0, harvest = 0 WHERE kind = 'поле'").run()
 
   runDays(db, id, 20)
 
   const st = getWorldState(db, id)
-  // огород даёт овощи (голода нет), но зерна нет — осенний оброк провален
-  assert.ok(st.events.some((e) => e.type === 'garden_harvest'))
+  // жатва провалена (не было посева)
+  assert.ok(st.events.some((e) => e.type === 'harvest_failed'))
   const martaAutumn = st.obligations.find((o) => o.character_id === 'chr-marta' && o.due_day === 20)
   assert.equal(martaAutumn?.status, 'failed')
 })

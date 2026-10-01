@@ -29,7 +29,7 @@ test('не-земледелец тоже собирает зерно (база �
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
 
-  runDays(db, id, 2)
+  runDays(db, id, 15)
   const st = getWorldState(db, id)
 
   const kasyaGrain = st.events.some(
