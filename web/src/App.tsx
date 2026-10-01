@@ -41,6 +41,16 @@ interface Hive {
   strength: number
 }
 
+interface Dependent {
+  id: string
+  household_id: string
+  name: string
+  gender: string
+  age: number
+  relation: string
+  labor: number
+}
+
 interface Obligation {
   id: number
   character_id: string
@@ -85,6 +95,7 @@ interface WorldState {
   plots?: Plot[]
   livestock?: Livestock[]
   hives?: Hive[]
+  dependents?: Dependent[]
   stock: StockItem[]
   goals: Goal[]
   obligations: Obligation[]
@@ -444,6 +455,18 @@ export default function App() {
                 </li>
               ))
             )}
+          </ul>
+
+          <h2>Семья (домочадцы)</h2>
+          <ul>
+            {world.households.map((hh) => {
+              const deps = (world.dependents ?? []).filter((d) => d.household_id === hh.id)
+              return (
+                <li key={hh.id}>
+                  <strong>{hh.name}</strong>: {deps.map((d) => `${d.name} (${d.relation}, ${d.age})`).join(', ') || '—'}
+                </li>
+              )
+            })}
           </ul>
 
           <h2>Наделы</h2>

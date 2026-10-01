@@ -35,8 +35,8 @@ test('существующая база v4 мигрирует в v6 (через 
     const row = migrated.prepare('SELECT * FROM knowledge').get() as Record<string, unknown>
     const columns = migrated.prepare('PRAGMA table_info(knowledge)').all() as Array<{ name: string }>
 
-    assert.equal(SCHEMA_VERSION, 14)
-    assert.equal(version.value, '14')
+    assert.equal(SCHEMA_VERSION, 15)
+    assert.equal(version.value, '15')
     assert.equal(row.summary, 'старое знание')
     assert.equal(row.event_id, null, 'legacy knowledge has no retroactively invented event link')
     assert.ok(columns.some((column) => column.name === 'event_id'))

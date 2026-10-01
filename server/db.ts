@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 14
+export const SCHEMA_VERSION = 15
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -173,6 +173,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 11) migrateV11ToV12(db)
   if (currentVersion <= 12) migrateV12ToV13(db)
   if (currentVersion <= 13) migrateV13ToV14(db)
+  if (currentVersion <= 14) migrateV14ToV15(db)
   assertSchemaVersion(db)
 }
 
@@ -484,6 +485,31 @@ function migrateV13ToV14(db: DatabaseSync): void {
         id TEXT NOT NULL,
         household_id TEXT NOT NULL,
         strength INTEGER NOT NULL,
+        PRIMARY KEY (world_id, id)
+      );
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('14')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add dependents (домочадцы — зомби-NPC без LLM). */
+function migrateV14ToV15(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS dependents (
+        world_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        household_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        gender TEXT NOT NULL,
+        age INTEGER NOT NULL,
+        relation TEXT NOT NULL,
+        labor REAL NOT NULL,
         PRIMARY KEY (world_id, id)
       );
     `)
