@@ -450,26 +450,48 @@ function ageDependents(db: DatabaseSync, worldId: string, day: number, phase: nu
 }
 
 /**
- * D-039 (пометка на будущее): сейчас тик процедурный — чистые функции над SQL-состоянием.
- * Формальный FSM (явное поле `state` + таблица переходов) — отложенная цель.
- * Чтобы не мешать ей: тики — чистые «состояние → новое состояние + события», без скрытых
- * побочных эффектов (LLM/HTTP сюда не ходит), состояние — явные колонки, диспетчер — единственная
- * точка оркестрации; новые сущности подключаются через свой `tick*`.
+ * D-039 (шаг 2 выполнен): диспетчер тиков = реестр сущностей.
+ * Каждая сущность — запись в TICK_REGISTRY со своим `tick`; добавить существо = добавить запись (+ seed).
+ * Тики — чистые «состояние → новое состояние + события», LLM/HTTP сюда не ходит.
+ * Формальный FSM (явное поле `state` + таблица переходов) — следующий шаг; код к нему готов.
  */
-/** Тик мира: один проход всех сущностей по фазе. Диспетчер — сущности ниже. */
-function tickPhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
-  if (phase === 0) tickSeason(db, worldId, day, phase)
 
+type TickFn = (db: DatabaseSync, worldId: string, day: number, phase: number) => void
+
+interface TickEntry {
+  name: string
+  /** Тикает только в эти фазы; если не задано — каждую фазу. */
+  phases?: number[]
+  tick: TickFn
+}
+
+/** Реестр сущностей мира. Порядок массива = порядок тика. */
+export const TICK_REGISTRY: TickEntry[] = [
+  { name: 'season', phases: [0], tick: tickSeason },
+  { name: 'characters', tick: tickCharacters },
+  { name: 'dependents', phases: [1], tick: tickDependents },
+  { name: 'obligations', phases: [3], tick: tickObligations },
+  { name: 'illness', phases: [3], tick: tickIllness },
+  { name: 'mutualAid', phases: [3], tick: mutualAid },
+]
+
+/** Тик мира: один проход реестра сущностей по фазе. */
+function tickPhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  for (const entry of TICK_REGISTRY) {
+    if (entry.phases && !entry.phases.includes(phase)) continue
+    entry.tick(db, worldId, day, phase)
+  }
+}
+
+/** Тик всех персонажей (обёртка над per-персонажным `tickCharacter`). */
+function tickCharacters(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   const chars = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
   for (const c of chars) tickCharacter(db, worldId, day, phase, c)
+}
 
-  if (phase === 1) tickDependents(db, worldId, day, phase)
-
-  if (phase === 3) {
-    settleObligations(db, worldId, day)
-    tickIllness(db, worldId, day, phase)
-    mutualAid(db, worldId, day, phase)
-  }
+/** Обёртка: урегулирование обязательств как тик по фазе. */
+function tickObligations(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  settleObligations(db, worldId, day)
 }
 
 /** Сезонные переходы и надел (утро). */
