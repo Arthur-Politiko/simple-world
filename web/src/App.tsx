@@ -35,6 +35,12 @@ interface Livestock {
   age: number
 }
 
+interface Hive {
+  id: string
+  household_id: string
+  strength: number
+}
+
 interface Obligation {
   id: number
   character_id: string
@@ -78,6 +84,7 @@ interface WorldState {
   households: { id: string; name: string }[]
   plots: Plot[]
   livestock: Livestock[]
+  hives: Hive[]
   stock: StockItem[]
   goals: Goal[]
   obligations: Obligation[]
@@ -425,6 +432,19 @@ export default function App() {
               </tbody>
             </table>
           )}
+
+          <h2>Ульи</h2>
+          <ul>
+            {world.hives.length === 0 ? (
+              <li>Ульев нет.</li>
+            ) : (
+              world.hives.map((h) => (
+                <li key={h.id}>
+                  {h.id} — {householdNameOf(h.household_id)}, сила {h.strength}
+                </li>
+              ))
+            )}
+          </ul>
 
           <h2>Наделы</h2>
           <ul>

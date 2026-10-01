@@ -126,6 +126,13 @@ export interface LivestockRow {
   age: number
 }
 
+export interface HiveRow {
+  world_id: string
+  id: string
+  household_id: string
+  strength: number
+}
+
 export interface WorldState {
   world: WorldRow
   phaseName: string
@@ -134,6 +141,7 @@ export interface WorldState {
   households: HouseholdRow[]
   plots: PlotRow[]
   livestock: LivestockRow[]
+  hives: HiveRow[]
   characters: CharacterRow[]
   stock: StockRow[]
   goals: GoalRow[]
@@ -201,7 +209,7 @@ const TRADER_GRAIN = 20
 const ROAD_WASHOUT_DAYS = 4
 
 // что торговец покупает у деревни (цена за единицу)
-const BUY_PRICES: Record<string, number> = { дрова: 1, рыба: 2, ткань: 3 }
+const BUY_PRICES: Record<string, number> = { дрова: 1, рыба: 2, ткань: 3, мёд: 2 }
 // что торговец продаёт деревне (цена за единицу)
 const SELL_PRICES: Record<string, number> = { зерно: 2, соль: 2 }
 
@@ -269,6 +277,11 @@ const INITIAL_LIVESTOCK = [
   { householdId: 'hh-jan', kind: 'птица', id: 'птица-1', name: null, age: 60 },
   { householdId: 'hh-jan', kind: 'птица', id: 'птица-2', name: null, age: 60 },
   { householdId: 'hh-inn', kind: 'птица', id: 'птица-3', name: null, age: 90 },
+]
+
+const INITIAL_HIVES = [
+  { householdId: 'hh-marta', id: 'улей-марта', strength: 70 },
+  { householdId: 'hh-inn', id: 'улей-трактир', strength: 50 },
 ]
 
 const DEFAULT_GOALS = [
@@ -413,6 +426,7 @@ function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: nu
       producePlotResource(db, worldId, day, phase, 'луг', 'сено', 'hay_harvest')
     }
     tickLivestock(db, worldId, day, phase)
+    tickHives(db, worldId, day, phase)
   }
 
   const chars = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
@@ -549,6 +563,35 @@ function hashString(s: string): number {
     h = (h * 31 + s.charCodeAt(i)) >>> 0
   }
   return h
+}
+
+/** Ульи (бортничество): сила растёт в тёплый сезон, падает зимой; дают мёд. */
+function tickHives(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const season = seasonOfDay(day)
+  const hives = db.prepare('SELECT * FROM hives WHERE world_id = ? ORDER BY id').all(worldId) as unknown as HiveRow[]
+
+  for (const h of hives) {
+    let strength = h.strength
+    if (season === 'зима') {
+      strength = Math.max(0, strength - 20)
+    } else {
+      strength = Math.min(100, strength + (season === 'весна' ? 10 : 5))
+    }
+
+    // мёд в тёплый сезон, если улей силён
+    if (season !== 'зима' && strength >= 50) {
+      distributeToHousehold(db, worldId, h.household_id, 'мёд', 1)
+      logEvent(db, worldId, day, phase, 'hive_honey', { householdId: h.household_id, hiveId: h.id, amount: 1 })
+    }
+
+    // смерть улья
+    if (strength <= 0) {
+      db.prepare('DELETE FROM hives WHERE world_id = ? AND id = ?').run(worldId, h.id)
+      logEvent(db, worldId, day, phase, 'hive_died', { householdId: h.household_id, hiveId: h.id })
+    } else {
+      db.prepare('UPDATE hives SET strength = ? WHERE world_id = ? AND id = ?').run(strength, worldId, h.id)
+    }
+  }
 }
 
 /** Выходной: без работы, отдых восстанавливает здоровье. */
@@ -875,6 +918,9 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
     for (const lv of INITIAL_LIVESTOCK) {
       db.prepare('INSERT INTO livestock (world_id, id, household_id, kind, name, health, age) VALUES (?, ?, ?, ?, ?, 100, ?)').run(id, lv.id, lv.householdId, lv.kind, lv.name, lv.age)
     }
+    for (const h of INITIAL_HIVES) {
+      db.prepare('INSERT INTO hives (world_id, id, household_id, strength) VALUES (?, ?, ?, ?)').run(id, h.id, h.householdId, h.strength)
+    }
     for (const chr of DEFAULT_CHARACTERS) {
       db.prepare(
         'INSERT INTO characters (world_id, id, name, location_id, role, energy, household_id, health) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -1195,6 +1241,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
   const households = db.prepare('SELECT * FROM households WHERE world_id = ? ORDER BY id').all(worldId) as unknown as HouseholdRow[]
   const plots = db.prepare('SELECT * FROM plots WHERE world_id = ? ORDER BY household_id, kind').all(worldId) as unknown as PlotRow[]
   const livestock = db.prepare('SELECT * FROM livestock WHERE world_id = ? ORDER BY household_id, kind').all(worldId) as unknown as LivestockRow[]
+  const hives = db.prepare('SELECT * FROM hives WHERE world_id = ? ORDER BY id').all(worldId) as unknown as HiveRow[]
   const characters = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
   const stock = db
     .prepare('SELECT * FROM stock WHERE world_id = ? ORDER BY holder_type, holder_id, resource')
@@ -1223,6 +1270,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     households,
     plots,
     livestock,
+    hives,
     characters,
     stock,
     goals,

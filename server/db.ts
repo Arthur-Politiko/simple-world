@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -172,6 +172,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 10) migrateV10ToV11(db)
   if (currentVersion <= 11) migrateV11ToV12(db)
   if (currentVersion <= 12) migrateV12ToV13(db)
+  if (currentVersion <= 13) migrateV13ToV14(db)
   assertSchemaVersion(db)
 }
 
@@ -465,6 +466,27 @@ function migrateV12ToV13(db: DatabaseSync): void {
     }
     db.exec('DROP TABLE livestock')
     db.exec('ALTER TABLE livestock_new RENAME TO livestock')
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('13')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add hives (улей — бортничество, промысловый агент). */
+function migrateV13ToV14(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS hives (
+        world_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        household_id TEXT NOT NULL,
+        strength INTEGER NOT NULL,
+        PRIMARY KEY (world_id, id)
+      );
+    `)
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
     db.exec('COMMIT')
   } catch (error) {
