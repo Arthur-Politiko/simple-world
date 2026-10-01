@@ -162,9 +162,10 @@ const FIELD_HARVEST: Record<string, number> = {
   'hh-inn': 5,
 }
 // скот: корм (зерно в день), продукт, тяга
+// скот: корм (сено в день), продукт, тяга
 const LIVESTOCK: Record<string, { title: string; feed: number; product?: string; productPerDay?: number; traction?: boolean }> = {
   корова: { title: 'корова', feed: 1, product: 'молоко', productPerDay: 1 },
-  птица: { title: 'птица', feed: 0, product: 'яйца', productPerDay: 1 },
+  птица: { title: 'птица', feed: 1, product: 'яйца', productPerDay: 1 },
   вол: { title: 'вол', feed: 2, traction: true },
 }
 const COIN = 'монеты'
@@ -374,7 +375,8 @@ function forageAmount(seed: number, day: number): number {
 
 function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   if (phase === 0) {
-    produceGardenVegetables(db, worldId, day, phase)
+    producePlotResource(db, worldId, day, phase, 'огород', 'овощи', 'garden_harvest')
+    producePlotResource(db, worldId, day, phase, 'луг', 'сено', 'hay_harvest')
     tickLivestock(db, worldId, day, phase)
   }
 
@@ -434,17 +436,17 @@ function consumeFromHousehold(db: DatabaseSync, worldId: string, householdId: st
   return amount - remaining
 }
 
-/** Огород каждого двора даёт базовое пропитание (овощи), распределяемое между членами двора. */
-function produceGardenVegetables(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+/** Надел (огород/луг) даёт ресурс, распределяемый между членами двора. */
+function producePlotResource(db: DatabaseSync, worldId: string, day: number, phase: number, kind: string, resource: string, eventType: string): void {
   const plots = db
-    .prepare("SELECT household_id, size FROM plots WHERE world_id = ? AND kind = 'огород'")
-    .all(worldId) as unknown as Array<{ household_id: string; size: number }>
+    .prepare('SELECT household_id, size FROM plots WHERE world_id = ? AND kind = ?')
+    .all(worldId, kind) as unknown as Array<{ household_id: string; size: number }>
 
   for (const plot of plots) {
     if (plot.size <= 0) continue
-    const total = distributeToHousehold(db, worldId, plot.household_id, 'овощи', plot.size)
+    const total = distributeToHousehold(db, worldId, plot.household_id, resource, plot.size)
     if (total > 0) {
-      logEvent(db, worldId, day, phase, 'garden_harvest', { householdId: plot.household_id, resource: 'овощи', amount: total })
+      logEvent(db, worldId, day, phase, eventType, { householdId: plot.household_id, resource, amount: total })
     }
   }
 }
@@ -461,9 +463,9 @@ function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: nu
     const spec = LIVESTOCK[lv.kind]
     if (!spec || lv.count <= 0) continue
 
-    // корм
+    // корм (сено)
     const feedNeeded = lv.count * spec.feed
-    const fed = consumeFromHousehold(db, worldId, lv.household_id, 'зерно', feedNeeded)
+    const fed = consumeFromHousehold(db, worldId, lv.household_id, 'сено', feedNeeded)
 
     // здоровье
     let health = lv.health
@@ -486,6 +488,12 @@ function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: nu
       const amount = lv.count * (spec.productPerDay ?? 1)
       distributeToHousehold(db, worldId, lv.household_id, spec.product, amount)
       logEvent(db, worldId, day, phase, 'livestock_produce', { householdId: lv.household_id, kind: lv.kind, resource: spec.product, amount })
+    }
+
+    // навоз → удобрение поля двора (+1 зерно к урожаю за голову)
+    if (health >= 40) {
+      db.prepare("UPDATE plots SET harvest = harvest + ? WHERE world_id = ? AND household_id = ? AND kind = 'поле'").run(lv.count, worldId, lv.household_id)
+      logEvent(db, worldId, day, phase, 'manure', { householdId: lv.household_id, amount: lv.count })
     }
 
     // смерть одной головы / обновление здоровья
@@ -759,9 +767,9 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
       )
     }
     for (const hh of DEFAULT_HOUSEHOLDS) {
-      // огород — базовое пропитание каждого двора
+      // огород — добавка; луг — сено для скота; поле — зерно (у земледельцев больше)
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 3)
-      // поле — зерно; у земледельцев поле больше
+      db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'луг', ?)").run(id, hh.id, 5)
       const grain = FIELD_HARVEST[hh.id] ?? 8
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest) VALUES (?, ?, 'поле', ?, ?)").run(id, hh.id, grain, grain)
     }

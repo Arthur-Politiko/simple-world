@@ -38,17 +38,27 @@ test('вол увеличивает сбор зерна (тяга)', () => {
   assert.equal((martaWork.payload as { amount: number }).amount, 3, 'с волом сбор 2 + 1 тяги')
 })
 
-test('скот потребляет корм (зерно) и без корма падает здоровье', () => {
+test('скот без сена падает здоровье', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
-  // заберём всё зерно у Марты и опустошим поля — вол не сможет есть
-  db.prepare("DELETE FROM stock WHERE holder_type = 'character' AND holder_id IN ('chr-marta', 'chr-tomas') AND resource = 'зерно'").run()
-  db.prepare("UPDATE plots SET harvest = 0 WHERE kind = 'поле'").run()
+  // заберём сено у Марты и опустошим луга — вол не сможет есть
+  db.prepare("DELETE FROM stock WHERE holder_type = 'character' AND holder_id IN ('chr-marta', 'chr-tomas') AND resource = 'сено'").run()
+  db.prepare("UPDATE plots SET size = 0 WHERE kind = 'луг'").run()
 
   runDays(db, id, 6)
   const st = getWorldState(db, id)
   const ox = st.livestock.find((l) => l.household_id === 'hh-marta' && l.kind === 'вол')
   // вол либо пал, либо серьёзно болеет
-  assert.ok(!ox || ox.health < 100, 'без корма вол не остаётся здоровым')
+  assert.ok(!ox || ox.health < 100, 'без сена вол не остаётся здоровым')
+})
+
+test('скот даёт навоз, удобряющий поле', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+
+  runDays(db, id, 2)
+  const st = getWorldState(db, id)
+  assert.ok(st.events.some((e) => e.type === 'manure'), 'скот даёт навоз')
 })
