@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 7
+export const SCHEMA_VERSION = 8
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -166,6 +166,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 4) migrateV4ToV5(db)
   if (currentVersion <= 5) migrateV5ToV6(db)
   if (currentVersion <= 6) migrateV6ToV7(db)
+  if (currentVersion <= 7) migrateV7ToV8(db)
   assertSchemaVersion(db)
 }
 
@@ -316,6 +317,28 @@ function migrateV6ToV7(db: DatabaseSync): void {
         error TEXT,
         memory_revision INTEGER NOT NULL,
         created_at TEXT NOT NULL
+      );
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('7')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Add short traces for evicted relationship profiles. */
+function migrateV7ToV8(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS relationship_traces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        note TEXT NOT NULL,
+        evicted_at TEXT NOT NULL
       );
     `)
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))

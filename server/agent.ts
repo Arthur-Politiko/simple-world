@@ -13,6 +13,7 @@ import {
   type WorldState,
 } from './world'
 import { recordLLMCall } from './metrics'
+import { consolidateMemory } from './forgetting'
 
 const ROLE_TITLES: Record<string, string> = {
   zemledelec: 'земледелец',
@@ -162,6 +163,8 @@ export async function reflectOnEvent(
     ...(content.relationships !== undefined ? { relationships: content.relationships } : {}),
     ...(content.beliefs !== undefined ? { beliefs: content.beliefs } : {}),
   })
+
+  consolidateMemory(db, worldId, characterId)
 
   return {
     proposalId,

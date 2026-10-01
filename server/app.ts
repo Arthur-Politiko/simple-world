@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { applyReflectionProposal, exportCharacterMemoryMarkdown, getCharacterMemory } from './memory'
 import { chooseIntention, getDecisionChain, reflectOnEvent, talkToCharacter } from './agent'
 import { getLLMUsageSummary } from './metrics'
+import { consolidateMemory } from './forgetting'
 import {
   advancePhase,
   consume,
@@ -142,6 +143,10 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
   app.get<{ Params: { id: string; characterId: string } }>('/api/worlds/:id/characters/:characterId/chain', async (req) => {
     return getDecisionChain(db, req.params.id, req.params.characterId)
+  })
+
+  app.post<{ Params: { id: string; characterId: string } }>('/api/worlds/:id/characters/:characterId/consolidate', async (req) => {
+    return consolidateMemory(db, req.params.id, req.params.characterId)
   })
 
   app.setErrorHandler((err, _req, reply) => {
