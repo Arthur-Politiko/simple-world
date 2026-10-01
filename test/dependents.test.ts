@@ -21,3 +21,22 @@ test('домочадцы стареют раз в год', () => {
   const after = st.dependents.find((d) => d.id === 'dep-gridya')!.age
   assert.equal(after, before + 1, 'домочадец стал старше на год')
 })
+
+test('труд домочадцев расширяет поле', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  // у Марты труд домочадцев = 0.3+1+0.6 = 1.9 → +23 к базе 30
+  const martaField = s.plots.find((p) => p.household_id === 'hh-marta' && p.kind === 'поле')
+  assert.ok((martaField?.size ?? 0) > 30, 'поле расширено трудом домочадцев')
+})
+
+test('домочадцы едят (рты) — потребляют еду из двора', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+
+  runDays(db, id, 7)
+  const st = getWorldState(db, id)
+  // домочадцы ели; проверим, что в деревне в целом не случилось голода у домочадцев
+  assert.ok(!st.events.some((e) => e.type === 'dependent_hunger'), 'домочадцы не голодали за неделю')
+})

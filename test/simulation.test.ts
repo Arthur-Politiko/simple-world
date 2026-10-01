@@ -33,19 +33,19 @@ test('деревня живёт две недели без игрока', () => 
   }
 })
 
-test('добыча ограничена трудом: за день не больше лимита', () => {
+test('урожай ограничен ёмкостью поля (нет бесконечной добычи)', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
-  const before = sumResource(getWorldState(db, id), 'зерно')
 
-  runDays(db, id, 1)
+  runDays(db, id, 28)
 
-  const after = sumResource(getWorldState(db, id), 'зерно')
-  // произведено = изменение + съедено за день (7 персонажей × 1)
-  const produced = after - before + 7
-  // максимум: все пашут (земледелец 2, остальные 1, + вол) × 2 смены ≈ 24
-  assert.ok(produced >= 0 && produced <= 24, `произведено за день вне лимита: ${produced}`)
+  const st = getWorldState(db, id)
+  const harvest = st.events.filter((e) => e.type === 'harvest').reduce((sum, e) => sum + (e.payload as { amount: number }).amount, 0)
+  const fieldCapacity = st.plots.filter((p) => p.kind === 'поле').reduce((sum, p) => sum + p.size, 0)
+  // урожай = посев × 3 + навоз; посев ≤ ёмкость/3, навоз конечен → урожай ≤ ~2 × ёмкость
+  assert.ok(harvest > 0, 'урожай был')
+  assert.ok(harvest <= fieldCapacity * 2, `урожай ограничен полем: ${harvest} ≤ ${fieldCapacity * 2}`)
 })
 
 test('обязательства урегулируются к сроку', () => {

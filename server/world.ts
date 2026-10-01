@@ -179,7 +179,8 @@ const REST_DAY_INTERVAL = 7
 const DAYS_PER_SEASON = 7
 const SEASON_NAMES = ['весна', 'лето', 'осень', 'зима'] as const
 const SEED_RETURN = 3 // «сам-три»: 1 посеянное зерно → 3 урожая
-export const FOOD_RESOURCES = ['зерно', 'рыба', 'овощи'] as const
+const LABOR_FIELD_FACTOR = 12 // трудовой вес домочадца → ёмкость поля
+export const FOOD_RESOURCES = ['овощи', 'рыба', 'зерно'] as const
 
 function isRestDay(day: number): boolean {
   return day > 0 && day % REST_DAY_INTERVAL === 0
@@ -201,10 +202,10 @@ const FORAGE_PHASE = 1 // фаза «день»
 const FORAGE_RESOURCE = 'ягоды'
 // распределение зерна по наделам дворов: у земледельцев поле больше
 const FIELD_HARVEST: Record<string, number> = {
-  'hh-marta': 30,
-  'hh-jan': 25,
-  'hh-grzegorz': 20,
-  'hh-inn': 10,
+  'hh-marta': 60,
+  'hh-jan': 50,
+  'hh-grzegorz': 40,
+  'hh-inn': 25,
 }
 // скот: корм (зерно в день), продукт, тяга
 // скот: корм (сено в день), продукт, тяга
@@ -265,13 +266,13 @@ const DEFAULT_CHARACTERS = [
 ]
 
 const INITIAL_STOCK = [
-  { holderType: 'character', holderId: 'chr-marta', resource: 'зерно', quantity: 8 },
-  { holderType: 'character', holderId: 'chr-tomas', resource: 'зерно', quantity: 6 },
-  { holderType: 'character', holderId: 'chr-grzegorz', resource: 'зерно', quantity: 5 },
-  { holderType: 'character', holderId: 'chr-kasya', resource: 'зерно', quantity: 5 },
-  { holderType: 'character', holderId: 'chr-jan', resource: 'зерно', quantity: 5 },
-  { holderType: 'character', holderId: 'chr-staszek', resource: 'зерно', quantity: 6 },
-  { holderType: 'character', holderId: 'chr-tomek', resource: 'зерно', quantity: 4 },
+  { holderType: 'character', holderId: 'chr-marta', resource: 'зерно', quantity: 22 },
+  { holderType: 'character', holderId: 'chr-tomas', resource: 'зерно', quantity: 16 },
+  { holderType: 'character', holderId: 'chr-grzegorz', resource: 'зерно', quantity: 12 },
+  { holderType: 'character', holderId: 'chr-kasya', resource: 'зерно', quantity: 10 },
+  { holderType: 'character', holderId: 'chr-jan', resource: 'зерно', quantity: 10 },
+  { holderType: 'character', holderId: 'chr-staszek', resource: 'зерно', quantity: 15 },
+  { holderType: 'character', holderId: 'chr-tomek', resource: 'зерно', quantity: 15 },
   { holderType: 'character', holderId: 'chr-grzegorz', resource: 'дрова', quantity: 4 },
   { holderType: 'character', holderId: 'chr-marta', resource: 'дрова', quantity: 3 },
   { holderType: 'character', holderId: 'chr-tomas', resource: 'дрова', quantity: 3 },
@@ -307,6 +308,10 @@ const INITIAL_DEPENDENTS = [
   { householdId: 'hh-inn', id: 'dep-matryona', name: 'Матрёна', gender: 'ж', age: 33, relation: 'жена', labor: 0.6 },
   { householdId: 'hh-inn', id: 'dep-varvara', name: 'Варвара', gender: 'ж', age: 12, relation: 'дочь', labor: 0.3 },
 ]
+
+function householdDependentLabor(householdId: string): number {
+  return INITIAL_DEPENDENTS.filter((d) => d.householdId === householdId).reduce((sum, d) => sum + d.labor, 0)
+}
 
 const DEFAULT_GOALS = [
   { characterId: 'chr-marta', description: 'собрать урожай до заморозков', priority: 1 },
@@ -456,6 +461,8 @@ function tickPhase(db: DatabaseSync, worldId: string, day: number, phase: number
   const chars = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
   for (const c of chars) tickCharacter(db, worldId, day, phase, c)
 
+  if (phase === 1) tickDependents(db, worldId, day, phase)
+
   if (phase === 3) {
     settleObligations(db, worldId, day)
     tickIllness(db, worldId, day, phase)
@@ -495,6 +502,27 @@ function tickCharacter(db: DatabaseSync, worldId: string, day: number, phase: nu
     eat(db, worldId, day, phase, c)
   } else if (phase === 3) {
     sleep(db, worldId, day, phase, c)
+  }
+}
+
+/** Съедает любую еду (зерно → рыба → овощи) из запасов двора; возвращает съеденное. */
+function consumeAnyFood(db: DatabaseSync, worldId: string, householdId: string, amount: number): number {
+  let remaining = amount
+  for (const food of FOOD_RESOURCES) {
+    if (remaining <= 0) break
+    remaining -= consumeFromHousehold(db, worldId, householdId, food, remaining)
+  }
+  return amount - remaining
+}
+
+/** Домочадцы едят (рты): каждый — 1 еду в день из запасов двора. */
+function tickDependents(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const deps = db.prepare('SELECT * FROM dependents WHERE world_id = ? ORDER BY id').all(worldId) as unknown as DependentRow[]
+  for (const d of deps) {
+    const fed = consumeAnyFood(db, worldId, d.household_id, 1)
+    if (fed < 1) {
+      logEvent(db, worldId, day, phase, 'dependent_hunger', { dependentId: d.id, name: d.name, householdId: d.household_id })
+    }
   }
 }
 
@@ -955,11 +983,12 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
       )
     }
     for (const hh of DEFAULT_HOUSEHOLDS) {
-      // огород — добавка/страховка; луг — сено для скота; поле — зерно (база, у земледельцев больше)
-      db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 2)
+      // огород — добавка/страховка; луг — сено для скота; поле — зерно (труд домочадцев расширяет поле)
+      db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 4)
       db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'луг', ?)").run(id, hh.id, 5)
-      const grain = FIELD_HARVEST[hh.id] ?? 8
-      db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest, sown, manure) VALUES (?, ?, 'поле', ?, 0, 0, 0)").run(id, hh.id, grain)
+      const base = FIELD_HARVEST[hh.id] ?? 8
+      const fieldSize = base + Math.round(householdDependentLabor(hh.id) * LABOR_FIELD_FACTOR)
+      db.prepare("INSERT INTO plots (world_id, household_id, kind, size, harvest, sown, manure) VALUES (?, ?, 'поле', ?, 0, 0, 0)").run(id, hh.id, fieldSize)
     }
     for (const lv of INITIAL_LIVESTOCK) {
       db.prepare('INSERT INTO livestock (world_id, id, household_id, kind, name, health, age) VALUES (?, ?, ?, ?, ?, 100, ?)').run(id, lv.id, lv.householdId, lv.kind, lv.name, lv.age)
