@@ -442,6 +442,13 @@ function ageDependents(db: DatabaseSync, worldId: string, day: number, phase: nu
   logEvent(db, worldId, day, phase, 'dependents_aged', {})
 }
 
+/**
+ * D-039 (пометка на будущее): сейчас тик процедурный — чистые функции над SQL-состоянием.
+ * Формальный FSM (явное поле `state` + таблица переходов) — отложенная цель.
+ * Чтобы не мешать ей: тики — чистые «состояние → новое состояние + события», без скрытых
+ * побочных эффектов (LLM/HTTP сюда не ходит), состояние — явные колонки, диспетчер — единственная
+ * точка оркестрации; новые сущности подключаются через свой `tick*`.
+ */
 /** Тик мира: один проход всех сущностей по фазе. Диспетчер — сущности ниже. */
 function tickPhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   if (phase === 0) tickSeason(db, worldId, day, phase)
