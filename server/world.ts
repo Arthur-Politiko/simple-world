@@ -412,43 +412,49 @@ function forageAmount(seed: number, day: number): number {
 
 // ---------- автономная повседневная жизнь ----------
 
-function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
-  if (phase === 0) {
-    // сезонные события: посев весной, жатва осенью
-    if (isSeasonStart(day)) {
-      const season = seasonOfDay(day)
-      if (season === 'весна') sowFields(db, worldId, day, phase)
-      if (season === 'осень') harvestFields(db, worldId, day, phase)
-    }
-    // огород/луг не плодоносят зимой
-    if (seasonOfDay(day) !== 'зима') {
-      producePlotResource(db, worldId, day, phase, 'огород', 'овощи', 'garden_harvest')
-      producePlotResource(db, worldId, day, phase, 'луг', 'сено', 'hay_harvest')
-    }
-    tickLivestock(db, worldId, day, phase)
-    tickHives(db, worldId, day, phase)
-  }
+/** Тик мира: один проход всех сущностей по фазе. Диспетчер — сущности ниже. */
+function tickPhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  if (phase === 0) tickSeason(db, worldId, day, phase)
 
   const chars = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
-
-  for (const c of chars) {
-    if (phase === 0 || phase === 2) {
-      if (isRestDay(day)) {
-        restDay(db, worldId, day, phase, c)
-      } else {
-        work(db, worldId, day, phase, c)
-      }
-    } else if (phase === 1) {
-      eat(db, worldId, day, phase, c)
-    } else if (phase === 3) {
-      sleep(db, worldId, day, phase, c)
-    }
-  }
+  for (const c of chars) tickCharacter(db, worldId, day, phase, c)
 
   if (phase === 3) {
     settleObligations(db, worldId, day)
     tickIllness(db, worldId, day, phase)
     mutualAid(db, worldId, day, phase)
+  }
+}
+
+/** Сезонные переходы и надел (утро). */
+function tickSeason(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  // посев весной, жатва осенью
+  if (isSeasonStart(day)) {
+    const season = seasonOfDay(day)
+    if (season === 'весна') sowFields(db, worldId, day, phase)
+    if (season === 'осень') harvestFields(db, worldId, day, phase)
+  }
+  // огород/луг не плодоносят зимой
+  if (seasonOfDay(day) !== 'зима') {
+    producePlotResource(db, worldId, day, phase, 'огород', 'овощи', 'garden_harvest')
+    producePlotResource(db, worldId, day, phase, 'луг', 'сено', 'hay_harvest')
+  }
+  tickLivestock(db, worldId, day, phase)
+  tickHives(db, worldId, day, phase)
+}
+
+/** Тик персонажа по фазе: работа/отдых/еда/сон. */
+function tickCharacter(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
+  if (phase === 0 || phase === 2) {
+    if (isRestDay(day)) {
+      restDay(db, worldId, day, phase, c)
+    } else {
+      work(db, worldId, day, phase, c)
+    }
+  } else if (phase === 1) {
+    eat(db, worldId, day, phase, c)
+  } else if (phase === 3) {
+    sleep(db, worldId, day, phase, c)
   }
 }
 
@@ -1048,7 +1054,7 @@ export function advancePhase(db: DatabaseSync, worldId: string): WorldState {
       }
     }
 
-    simulatePhase(db, worldId, next.day, next.phase)
+    tickPhase(db, worldId, next.day, next.phase)
 
     db.exec('COMMIT')
   } catch (e) {
