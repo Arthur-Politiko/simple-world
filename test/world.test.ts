@@ -113,8 +113,8 @@ test('конфликт: зерно идёт на еду или на платёж
   runDays(db, id, 20)
 
   const st = getWorldState(db, id)
-  // зерно ушло на еду, на осенний платёж не хватило
-  assert.ok(st.events.some((e) => e.type === 'hunger'))
+  // огород даёт овощи (голода нет), но зерна нет — осенний оброк провален
+  assert.ok(st.events.some((e) => e.type === 'garden_harvest'))
   const martaAutumn = st.obligations.find((o) => o.character_id === 'chr-marta' && o.due_day === 20)
   assert.equal(martaAutumn?.status, 'failed')
 })

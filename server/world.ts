@@ -105,11 +105,20 @@ export interface EventRow {
   created_at: string
 }
 
+export interface PlotRow {
+  world_id: string
+  household_id: string
+  kind: string
+  size: number
+  harvest: number | null
+}
+
 export interface WorldState {
   world: WorldRow
   phaseName: string
   locations: LocationRow[]
   households: HouseholdRow[]
+  plots: PlotRow[]
   characters: CharacterRow[]
   stock: StockRow[]
   goals: GoalRow[]
@@ -129,7 +138,7 @@ export class RuleError extends Error {
 }
 
 export const MAX_ENERGY = 2
-export const FOOD_RESOURCES = ['зерно', 'рыба'] as const
+export const FOOD_RESOURCES = ['зерно', 'рыба', 'овощи'] as const
 
 const FORAGE_PHASE = 1 // фаза «день»
 const FORAGE_RESOURCE = 'ягоды'
@@ -334,6 +343,10 @@ function forageAmount(seed: number, day: number): number {
 // ---------- автономная повседневная жизнь ----------
 
 function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  if (phase === 0) {
+    produceGardenVegetables(db, worldId, day, phase)
+  }
+
   const chars = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
 
   for (const c of chars) {
@@ -348,6 +361,34 @@ function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: nu
 
   if (phase === 3) {
     settleObligations(db, worldId, day)
+  }
+}
+
+/** Огород каждого двора даёт базовое пропитание (овощи), распределяемое между членами двора. */
+function produceGardenVegetables(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const plots = db
+    .prepare("SELECT household_id, size FROM plots WHERE world_id = ? AND kind = 'огород'")
+    .all(worldId) as unknown as Array<{ household_id: string; size: number }>
+
+  for (const plot of plots) {
+    if (plot.size <= 0) continue
+    const members = db
+      .prepare('SELECT id FROM characters WHERE world_id = ? AND household_id = ? ORDER BY id')
+      .all(worldId, plot.household_id) as unknown as Array<{ id: string }>
+    if (members.length === 0) continue
+
+    const per = Math.floor(plot.size / members.length)
+    const remainder = plot.size % members.length
+    let total = 0
+    for (let i = 0; i < members.length; i++) {
+      const amount = per + (i === 0 ? remainder : 0)
+      if (amount <= 0) continue
+      addStock(db, worldId, 'character', members[i].id, 'овощи', amount)
+      total += amount
+    }
+    if (total > 0) {
+      logEvent(db, worldId, day, phase, 'garden_harvest', { householdId: plot.household_id, resource: 'овощи', amount: total })
+    }
   }
 }
 
@@ -504,6 +545,10 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
         hh.name,
         hh.locationId,
       )
+    }
+    for (const hh of DEFAULT_HOUSEHOLDS) {
+      // огород — базовое пропитание каждого двора; поле добавится в следующем подэтапе
+      db.prepare("INSERT INTO plots (world_id, household_id, kind, size) VALUES (?, ?, 'огород', ?)").run(id, hh.id, 3)
     }
     for (const chr of DEFAULT_CHARACTERS) {
       db.prepare(
@@ -821,6 +866,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
   const world = getWorld(db, worldId)
   const locations = db.prepare('SELECT * FROM locations WHERE world_id = ? ORDER BY id').all(worldId) as unknown as LocationRow[]
   const households = db.prepare('SELECT * FROM households WHERE world_id = ? ORDER BY id').all(worldId) as unknown as HouseholdRow[]
+  const plots = db.prepare('SELECT * FROM plots WHERE world_id = ? ORDER BY household_id, kind').all(worldId) as unknown as PlotRow[]
   const characters = db.prepare('SELECT * FROM characters WHERE world_id = ? ORDER BY id').all(worldId) as unknown as CharacterRow[]
   const stock = db
     .prepare('SELECT * FROM stock WHERE world_id = ? ORDER BY holder_type, holder_id, resource')
@@ -846,6 +892,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     phaseName: phaseName(world.phase),
     locations,
     households,
+    plots,
     characters,
     stock,
     goals,
