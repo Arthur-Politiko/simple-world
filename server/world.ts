@@ -80,6 +80,7 @@ export interface KnowledgeRow {
   source: string
   summary: string
   fact_id: number | null
+  event_id: number | null
   is_true: boolean
   day: number
 }
@@ -280,14 +281,15 @@ function stockOf(
   return row?.quantity ?? 0
 }
 
-function logEvent(db: DatabaseSync, worldId: string, day: number, phase: number, type: string, payload: unknown): void {
+function logEvent(db: DatabaseSync, worldId: string, day: number, phase: number, type: string, payload: unknown): number {
   const row = db
     .prepare('SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM events WHERE world_id = ? AND day = ? AND phase = ?')
     .get(worldId, day, phase) as { maxSeq: number }
   const seq = row.maxSeq + 1
-  db.prepare(
+  const result = db.prepare(
     'INSERT INTO events (world_id, day, phase, seq, type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
   ).run(worldId, day, phase, seq, type, JSON.stringify(payload), new Date().toISOString())
+  return Number(result.lastInsertRowid)
 }
 
 function addFact(db: DatabaseSync, worldId: string, day: number, type: string, payload: unknown): number {
@@ -311,18 +313,17 @@ function deliverNews(
     .prepare("SELECT * FROM characters WHERE world_id = ? AND location_id = 'loc-inn'")
     .all(worldId) as unknown as CharacterRow[]
 
-  for (const c of audience) {
-    db.prepare(
-      'INSERT INTO knowledge (world_id, character_id, source, summary, fact_id, is_true, day) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).run(worldId, c.id, source, summary, factId, isTrue ? 1 : 0, day)
-  }
-
-  logEvent(db, worldId, day, phase, 'news', {
+  const newsEventId = logEvent(db, worldId, day, phase, 'news', {
     source,
     summary,
     isTrue,
     audience: audience.map((c) => c.id),
   })
+  for (const c of audience) {
+    db.prepare(
+      'INSERT INTO knowledge (world_id, character_id, source, summary, fact_id, event_id, is_true, day) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(worldId, c.id, source, summary, factId, newsEventId, isTrue ? 1 : 0, day)
+  }
 }
 
 function forageAmount(seed: number, day: number): number {
@@ -833,7 +834,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     Omit<FactRow, 'payload'> & { payload: string }
   >
   const knowledge = db.prepare('SELECT * FROM knowledge WHERE world_id = ? ORDER BY day, id').all(worldId) as unknown as Array<
-    Omit<KnowledgeRow, 'is_true'> & { is_true: number }
+    Omit<KnowledgeRow, 'is_true'> & { is_true: number; event_id?: number | null }
   >
   const trader = getTrader(db, worldId)
   const events = db
@@ -850,7 +851,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     goals,
     obligations,
     facts: facts.map((f) => ({ ...f, payload: JSON.parse(f.payload) as unknown })),
-    knowledge: knowledge.map((k) => ({ ...k, is_true: k.is_true === 1 })),
+    knowledge: knowledge.map((k) => ({ ...k, event_id: k.event_id ?? null, is_true: k.is_true === 1 })),
     trader,
     events: events.map((e) => ({
       id: e.id,

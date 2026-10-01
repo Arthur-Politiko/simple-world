@@ -2,18 +2,26 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
     mkdirSync(dirname(path), { recursive: true })
   }
   const db = new DatabaseSync(path)
+  db.exec('PRAGMA foreign_keys = ON')
   if (path !== ':memory:') {
     db.exec('PRAGMA journal_mode = WAL')
   }
   migrate(db)
   return db
+}
+
+function assertSchemaVersion(db: DatabaseSync): void {
+  const row = db.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get() as { value: string } | undefined
+  if (Number(row?.value) !== SCHEMA_VERSION) {
+    throw new Error(`schema version mismatch: db=${row?.value ?? 'missing'}, code=${SCHEMA_VERSION}`)
+  }
 }
 
 function migrate(db: DatabaseSync): void {
@@ -144,8 +152,122 @@ function migrate(db: DatabaseSync): void {
     | undefined
 
   if (!row) {
-    db.prepare("INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION))
-  } else if (Number(row.value) !== SCHEMA_VERSION) {
-    throw new Error(`schema version mismatch: db=${row.value}, code=${SCHEMA_VERSION}`)
+    // The existing base schema is v4; install the additive v5 memory tables below.
+    db.prepare("INSERT INTO schema_meta (key, value) VALUES ('schema_version', '4')").run()
+    migrateV4ToV5(db)
+    assertSchemaVersion(db)
+  } else {
+    const currentVersion = Number(row.value)
+    if (!Number.isInteger(currentVersion) || currentVersion > SCHEMA_VERSION || currentVersion < 1) {
+      throw new Error(`unsupported schema version: db=${row.value}, code=${SCHEMA_VERSION}`)
+    }
+    if (currentVersion === 4) {
+      migrateV4ToV5(db)
+    } else if (currentVersion !== SCHEMA_VERSION) {
+      throw new Error(`schema version mismatch: db=${row.value}, code=${SCHEMA_VERSION}`)
+    }
+    assertSchemaVersion(db)
+  }
+}
+
+/** Add NPC memory and reflection-proposal tables without rewriting world state. */
+function migrateV4ToV5(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    const knowledgeColumns = db.prepare('PRAGMA table_info(knowledge)').all() as Array<{ name: string }>
+    if (!knowledgeColumns.some((column) => column.name === 'event_id')) {
+      db.exec('ALTER TABLE knowledge ADD COLUMN event_id INTEGER')
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS character_memory (
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        core TEXT NOT NULL DEFAULT '',
+        current_state TEXT NOT NULL DEFAULT '',
+        revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (world_id, character_id),
+        FOREIGN KEY (world_id, character_id) REFERENCES characters(world_id, id)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('recent', 'significant')),
+        event_id INTEGER NOT NULL,
+        knowledge_id INTEGER,
+        content TEXT NOT NULL,
+        importance INTEGER NOT NULL CHECK (importance BETWEEN 0 AND 100),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (world_id, character_id) REFERENCES characters(world_id, id),
+        FOREIGN KEY (event_id) REFERENCES events(id),
+        FOREIGN KEY (knowledge_id) REFERENCES knowledge(id)
+      );
+      CREATE INDEX IF NOT EXISTS memory_entries_character ON memory_entries(world_id, character_id, id);
+
+      CREATE TABLE IF NOT EXISTS memory_relationships (
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        note TEXT NOT NULL,
+        trust INTEGER CHECK (trust BETWEEN -100 AND 100),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (world_id, character_id, target_id),
+        FOREIGN KEY (world_id, character_id) REFERENCES characters(world_id, id)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_beliefs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        statement TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('believed', 'uncertain', 'rejected')),
+        confidence INTEGER NOT NULL CHECK (confidence BETWEEN 0 AND 100),
+        knowledge_id INTEGER,
+        updated_at TEXT NOT NULL,
+        UNIQUE (world_id, character_id, statement),
+        FOREIGN KEY (world_id, character_id) REFERENCES characters(world_id, id),
+        FOREIGN KEY (knowledge_id) REFERENCES knowledge(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_proposals (
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        event_id INTEGER NOT NULL,
+        expected_revision INTEGER NOT NULL,
+        resulting_revision INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        PRIMARY KEY (world_id, character_id, proposal_id),
+        FOREIGN KEY (world_id, character_id) REFERENCES characters(world_id, id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_revisions (
+        world_id TEXT NOT NULL,
+        character_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        proposal_id TEXT NOT NULL,
+        event_id INTEGER NOT NULL,
+        core TEXT NOT NULL,
+        current_state TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (world_id, character_id, revision),
+        UNIQUE (world_id, character_id, proposal_id),
+        FOREIGN KEY (world_id, character_id) REFERENCES characters(world_id, id),
+        FOREIGN KEY (event_id) REFERENCES events(id)
+      );
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
   }
 }

@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { DatabaseSync } from 'node:sqlite'
+import { applyReflectionProposal, exportCharacterMemoryMarkdown, getCharacterMemory } from './memory'
 import {
   advancePhase,
   consume,
@@ -40,6 +41,23 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
 
   app.get<{ Params: IdParams }>('/api/worlds/:id', async (req) => {
     return getWorldState(db, req.params.id)
+  })
+
+  app.get<{ Params: { id: string; characterId: string } }>('/api/worlds/:id/characters/:characterId/memory', async (req) => {
+    return getCharacterMemory(db, req.params.id, req.params.characterId)
+  })
+
+  app.get<{ Params: { id: string; characterId: string } }>('/api/worlds/:id/characters/:characterId/memory.md', async (req, reply) => {
+    const memory = getCharacterMemory(db, req.params.id, req.params.characterId)
+    const world = getWorldState(db, req.params.id)
+    const character = world.characters.find((item) => item.id === req.params.characterId)
+    if (!character) throw new RuleError(`персонаж не найден: ${req.params.characterId}`)
+    return reply.type('text/markdown; charset=utf-8').send(exportCharacterMemoryMarkdown(memory, character.name))
+  })
+
+  app.post<{ Params: IdParams }>('/api/worlds/:id/memory/reflections', async (req) => {
+    const body = (req.body ?? {}) as Record<string, unknown>
+    return applyReflectionProposal(db, { ...body, worldId: req.params.id })
   })
 
   app.post<{ Params: IdParams }>('/api/worlds/:id/advance', async (req) => {

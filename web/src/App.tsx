@@ -39,6 +39,17 @@ interface EventRow {
   payload: Record<string, unknown>
 }
 
+interface CharacterMemory {
+  worldId: string
+  characterId: string
+  core: string
+  currentState: string
+  revision: number
+  entries: { id: number; kind: 'recent' | 'significant'; eventId: number; content: string; importance: number }[]
+  relationships: { targetId: string; note: string; trust: number | null }[]
+  beliefs: { statement: string; status: string; confidence: number }[]
+}
+
 interface WorldState {
   world: { id: string; name: string; seed: number; day: number; phase: number }
   phaseName: string
@@ -70,6 +81,9 @@ export default function App() {
   const [world, setWorld] = useState<WorldState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null)
+  const [memory, setMemory] = useState<CharacterMemory | null>(null)
+  const [memoryError, setMemoryError] = useState<string | null>(null)
 
   const api = useCallback(async (path: string, options?: RequestInit) => {
     const r = await fetch(path, options)
@@ -118,6 +132,23 @@ export default function App() {
   const nameOf = (id: string) => world?.characters.find((c) => c.id === id)?.name ?? id
   const locationOf = (id: string) => world?.locations.find((l) => l.id === id)?.name ?? id
 
+  const loadMemory = useCallback(async (characterId: string) => {
+    if (!world) return
+    setSelectedCharacterId(characterId)
+    setMemory(null)
+    setMemoryError(null)
+    try {
+      const response = await fetch(`/api/worlds/${world.world.id}/characters/${characterId}/memory`)
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      setMemory((await response.json()) as CharacterMemory)
+    } catch (e) {
+      setMemoryError(String(e))
+    }
+  }, [world])
+
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
       <h1>Живая деревня</h1>
@@ -153,6 +184,7 @@ export default function App() {
                 <th style={th}>Роль</th>
                 <th style={th}>Локация</th>
                 <th style={th}>Сил</th>
+                <th style={th}>Память</th>
               </tr>
             </thead>
             <tbody>
@@ -162,10 +194,55 @@ export default function App() {
                   <td style={td}>{ROLE_TITLES[c.role] ?? c.role}</td>
                   <td style={td}>{locationOf(c.location_id)}</td>
                   <td style={td}>{c.energy}</td>
+                  <td style={td}>
+                    <button onClick={() => loadMemory(c.id)} disabled={busy}>
+                      {selectedCharacterId === c.id && memory ? 'Открыто' : 'Wiki'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+
+          {selectedCharacterId && (
+            <section style={{ marginTop: '1.5rem', border: '1px solid #ddd', borderRadius: 8, padding: '1rem' }}>
+              <header style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+                <h2 style={{ margin: 0 }}>Wiki: {nameOf(selectedCharacterId)}</h2>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button onClick={() => void loadMemory(selectedCharacterId)} disabled={busy}>Обновить</button>
+                  <a href={`/api/worlds/${world.world.id}/characters/${selectedCharacterId}/memory.md`} target="_blank" rel="noreferrer">Скачать Markdown</a>
+                  <button onClick={() => { setSelectedCharacterId(null); setMemory(null); setMemoryError(null) }}>Закрыть</button>
+                </div>
+              </header>
+              {memoryError && <p style={{ color: 'crimson' }}>{memoryError}</p>}
+              {!memory && !memoryError && <p>Загружаю память…</p>}
+              {memory && (
+                <>
+                  <p>Ревизия {memory.revision}</p>
+                  <h3>Ядро</h3>
+                  <p>{memory.core || 'Пока не сформировано.'}</p>
+                  <h3>Текущее состояние</h3>
+                  <p>{memory.currentState || 'Не задано.'}</p>
+                  <h3>Недавний опыт</h3>
+                  {memory.entries.filter((entry) => entry.kind === 'recent').length === 0 ? <p>Записей пока нет.</p> : (
+                    <ul>{memory.entries.filter((entry) => entry.kind === 'recent').map((entry) => <li key={entry.id}>[событие {entry.eventId}] {entry.content}</li>)}</ul>
+                  )}
+                  <h3>Значимые воспоминания</h3>
+                  {memory.entries.filter((entry) => entry.kind === 'significant').length === 0 ? <p>Записей пока нет.</p> : (
+                    <ul>{memory.entries.filter((entry) => entry.kind === 'significant').map((entry) => <li key={entry.id}>[событие {entry.eventId}; важность {entry.importance}] {entry.content}</li>)}</ul>
+                  )}
+                  <h3>Отношения</h3>
+                  {memory.relationships.length === 0 ? <p>Отношений пока нет.</p> : (
+                    <ul>{memory.relationships.map((relationship) => <li key={relationship.targetId}>{relationship.targetId}{relationship.trust === null ? '' : ` (доверие ${relationship.trust})`}: {relationship.note}</li>)}</ul>
+                  )}
+                  <h3>Убеждения</h3>
+                  {memory.beliefs.length === 0 ? <p>Убеждений пока нет.</p> : (
+                    <ul>{memory.beliefs.map((belief, index) => <li key={`${belief.statement}-${index}`}>{belief.status}, уверенность {belief.confidence}%: {belief.statement}</li>)}</ul>
+                  )}
+                </>
+              )}
+            </section>
+          )}
 
           <h2>Запасы</h2>
           <ul>
