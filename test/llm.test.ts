@@ -3,8 +3,9 @@ import test from 'node:test'
 import { openDb } from '../server/db'
 import { chat, chatJSON } from '../server/llm'
 import { createWorld, getWorldState, moveCharacter, runDays } from '../server/world'
-import { chooseIntention, getDecisionChain, seedCharacterCore, reflectOnEvent, talkToCharacter } from '../server/agent'
+import { chooseIntention, consolidateMemorySemantic, getDecisionChain, seedCharacterCore, reflectOnEvent, talkToCharacter } from '../server/agent'
 import { getLLMUsageSummary } from '../server/metrics'
+import { DEFAULT_BUDGETS } from '../server/forgetting'
 
 // Реальные вызовы выполняются только при RUN_LLM_TESTS=1, чтобы не тратить API в обычном прогоне.
 const enabled = process.env.RUN_LLM_TESTS === '1'
@@ -95,4 +96,27 @@ test('talkToCharacter отвечает (реальный API)', { skip: !enabled
 
   const { reply } = await talkToCharacter(db, id, 'chr-marta', 'Как дела?')
   assert.ok(reply.length > 0)
+})
+
+test('смысловая консолидация сжимает эпизоды моделью (реальный API)', { skip: !enabled }, async () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  seedCharacterCore(db, id, 'chr-marta', 'ядро')
+  const eventId = s.events.find((e) => e.type === 'world_created')!.id
+
+  for (let i = 0; i < 5; i++) {
+    db.prepare(
+      'INSERT INTO memory_entries (world_id, character_id, kind, event_id, knowledge_id, content, importance, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+    ).run(id, 'chr-marta', 'significant', eventId, `честная сделка с торговцем №${i}`, 50, new Date().toISOString())
+  }
+
+  const result = await consolidateMemorySemantic(db, id, 'chr-marta', { ...DEFAULT_BUDGETS, maxSignificant: 2 })
+
+  assert.equal(result.mergedSignificant, 4)
+  assert.ok(result.summary && result.summary.length > 0)
+  const count = db
+    .prepare("SELECT COUNT(*) AS c FROM memory_entries WHERE world_id = ? AND character_id = ? AND kind = 'significant'")
+    .get(id, 'chr-marta') as { c: number }
+  assert.equal(count.c, 2)
 })

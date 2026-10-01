@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import { chat, chatJSON, DEFAULT_MODEL, REFLECTION_MODEL, type LLMUsage } from './llm'
+import { chat, chatJSON, DEFAULT_MODEL, loadLLMConfig, REFLECTION_MODEL, type LLMUsage } from './llm'
 import { applyReflectionProposal, getCharacterMemory, type CharacterMemory } from './memory'
 import {
   consume,
@@ -13,7 +13,14 @@ import {
   type WorldState,
 } from './world'
 import { recordLLMCall } from './metrics'
-import { consolidateMemory } from './forgetting'
+import {
+  consolidateMemory,
+  consolidateRecent,
+  DEFAULT_BUDGETS,
+  getSignificantOverflow,
+  mergeSignificantEntries,
+  type MemoryBudgets,
+} from './forgetting'
 
 const ROLE_TITLES: Record<string, string> = {
   zemledelec: 'земледелец',
@@ -164,7 +171,11 @@ export async function reflectOnEvent(
     ...(content.beliefs !== undefined ? { beliefs: content.beliefs } : {}),
   })
 
-  consolidateMemory(db, worldId, characterId)
+  if (loadLLMConfig()) {
+    await consolidateMemorySemantic(db, worldId, characterId)
+  } else {
+    consolidateMemory(db, worldId, characterId)
+  }
 
   return {
     proposalId,
@@ -175,8 +186,51 @@ export async function reflectOnEvent(
   }
 }
 
-// ---------- выбор намерения, диалог, цепочка решения ----------
+export interface SemanticConsolidationResult {
+  evictedRecent: number
+  promotedRecent: number
+  mergedSignificant: number
+  summary: string | null
+}
 
+/** Смысловая консолидация: переполнение significant сжимается моделью в общий вывод. */
+export async function consolidateMemorySemantic(
+  db: DatabaseSync,
+  worldId: string,
+  characterId: string,
+  budgets: MemoryBudgets = DEFAULT_BUDGETS,
+): Promise<SemanticConsolidationResult> {
+  const recent = consolidateRecent(db, worldId, characterId, budgets)
+  const overflow = getSignificantOverflow(db, worldId, characterId, budgets.maxSignificant)
+  if (!overflow) {
+    return { ...recent, mergedSignificant: 0, summary: null }
+  }
+
+  const contents = overflow.map((e) => e.content).join('\n- ')
+  const { value, usage } = await chatJSON<{ summary?: unknown }>(
+    REFLECTION_MODEL,
+    [
+      {
+        role: 'system',
+        content:
+          'Ты — компонент долговременной памяти NPC. Сожми несколько эпизодических воспоминаний в ОДИН краткий обобщённый вывод (1–2 предложения), сохранив суть и сделанный вывод, а не перечень деталей. Верни СТРОГО JSON: {"summary":"..."}',
+      },
+      { role: 'user', content: `Эпизоды:\n- ${contents}` },
+    ],
+    { maxTokens: 1000, temperature: 0.4 },
+  )
+  recordLLMCall(db, 'consolidation', usage)
+
+  const summary =
+    typeof value.summary === 'string' && value.summary.trim()
+      ? value.summary.trim()
+      : `Обобщение ${overflow.length} эпизодов: ${overflow.map((e) => (e.content ?? '').slice(0, 30)).join(' | ')}`
+
+  mergeSignificantEntries(db, worldId, characterId, overflow, summary)
+  return { ...recent, mergedSignificant: overflow.length, summary }
+}
+
+// ---------- выбор намерения, диалог, цепочка решения ----------
 export interface IntentionOutcome {
   decisionId: number
   outcome: 'executed' | 'rejected'

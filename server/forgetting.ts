@@ -1,10 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite'
 
 /**
- * Механика забывания и консолидации памяти (этап 7).
- * Детерминированная, без LLM. Трогает только эпизодические записи (`memory_entries`)
- * и профили отношений (`memory_relationships`); никогда не удаляет выводы —
- * убеждения (`memory_beliefs`), отношения с незавершёнными обязательствами, ядро.
+ * Механика забывания и консолидации памяти (этап 7) + переиспользуемые шаги
+ * для смысловой консолидации моделью (приоритет этапа 9).
+ * Трогает только эпизодические записи (`memory_entries`) и профили отношений;
+ * никогда не удаляет выводы — убеждения, защищённые отношения, ядро.
  */
 
 export interface MemoryBudgets {
@@ -27,16 +27,14 @@ export interface ConsolidationResult {
   mergedSignificant: number
 }
 
-/** Приводит память к бюджетам: скользящее окно recent + сжатие significant. */
-export function consolidateMemory(
+/** Скользящее окно recent: старые малозначимые вытесняются, значимые повышаются. */
+export function consolidateRecent(
   db: DatabaseSync,
   worldId: string,
   characterId: string,
   budgets: MemoryBudgets = DEFAULT_BUDGETS,
-): ConsolidationResult {
-  const result = { evictedRecent: 0, promotedRecent: 0, mergedSignificant: 0 }
-
-  // 1. recent — скользящее окно: старые малозначимые вытесняются, значимые повышаются.
+): { evictedRecent: number; promotedRecent: number } {
+  const result = { evictedRecent: 0, promotedRecent: 0 }
   const recent = db
     .prepare(
       "SELECT id, importance FROM memory_entries WHERE world_id = ? AND character_id = ? AND kind = 'recent' ORDER BY id",
@@ -56,43 +54,85 @@ export function consolidateMemory(
     }
   }
 
-  // 2. significant — переполнение сжимается в один общий вывод.
+  return result
+}
+
+export interface SignificantEntry {
+  id: number
+  event_id: number
+  content: string
+  importance: number
+}
+
+/** Возвращает записи, подлежащие сжатию при переполнении significant; null, если в рамках бюджета. */
+export function getSignificantOverflow(
+  db: DatabaseSync,
+  worldId: string,
+  characterId: string,
+  max: number,
+): SignificantEntry[] | null {
   const significant = db
     .prepare(
       "SELECT id, event_id, content, importance FROM memory_entries WHERE world_id = ? AND character_id = ? AND kind = 'significant' ORDER BY importance ASC, id ASC",
     )
-    .all(worldId, characterId) as unknown as Array<{
-    id: number
-    event_id: number
-    content: string
-    importance: number
-  }>
+    .all(worldId, characterId) as unknown as SignificantEntry[]
 
-  if (significant.length > budgets.maxSignificant) {
-    const overflow = significant.length - budgets.maxSignificant
-    const toMerge = significant.slice(0, overflow + 1)
-    const ids = toMerge.map((e) => e.id)
-    const oldestEventId = Math.min(...toMerge.map((e) => e.event_id))
-    const maxImportance = Math.max(...toMerge.map((e) => e.importance))
-    const excerpt = toMerge.map((e) => (e.content ?? '').slice(0, 30)).join(' | ')
-    const placeholders = ids.map(() => '?').join(',')
+  if (significant.length <= max) return null
+  const overflow = significant.length - max
+  return significant.slice(0, overflow + 1)
+}
 
-    db.prepare(`DELETE FROM memory_entries WHERE id IN (${placeholders})`).run(...ids)
-    db.prepare(
-      `INSERT INTO memory_entries (world_id, character_id, kind, event_id, knowledge_id, content, importance, created_at)
-       VALUES (?, ?, 'significant', ?, NULL, ?, ?, ?)`,
-    ).run(
-      worldId,
-      characterId,
-      oldestEventId,
-      `Обобщение ${toMerge.length} эпизодов: ${excerpt}`,
-      maxImportance,
-      new Date().toISOString(),
-    )
-    result.mergedSignificant = toMerge.length
+/** Удаляет переданные записи и добавляет одну обобщающую (с указанным содержанием). */
+export function mergeSignificantEntries(
+  db: DatabaseSync,
+  worldId: string,
+  characterId: string,
+  entries: SignificantEntry[],
+  summaryContent: string,
+): void {
+  const ids = entries.map((e) => e.id)
+  const oldestEventId = Math.min(...entries.map((e) => e.event_id))
+  const maxImportance = Math.max(...entries.map((e) => e.importance))
+  const placeholders = ids.map(() => '?').join(',')
+
+  db.prepare(`DELETE FROM memory_entries WHERE id IN (${placeholders})`).run(...ids)
+  db.prepare(
+    `INSERT INTO memory_entries (world_id, character_id, kind, event_id, knowledge_id, content, importance, created_at)
+     VALUES (?, ?, 'significant', ?, NULL, ?, ?, ?)`,
+  ).run(worldId, characterId, oldestEventId, summaryContent, maxImportance, new Date().toISOString())
+}
+
+function templateSummary(entries: SignificantEntry[]): string {
+  const excerpt = entries.map((e) => (e.content ?? '').slice(0, 30)).join(' | ')
+  return `Обобщение ${entries.length} эпизодов: ${excerpt}`
+}
+
+export function consolidateSignificant(
+  db: DatabaseSync,
+  worldId: string,
+  characterId: string,
+  budgets: MemoryBudgets = DEFAULT_BUDGETS,
+): { mergedSignificant: number } {
+  const overflow = getSignificantOverflow(db, worldId, characterId, budgets.maxSignificant)
+  if (!overflow) return { mergedSignificant: 0 }
+  mergeSignificantEntries(db, worldId, characterId, overflow, templateSummary(overflow))
+  return { mergedSignificant: overflow.length }
+}
+
+/** Механическая консолидация (без LLM): окно recent + шаблонное сжатие significant. */
+export function consolidateMemory(
+  db: DatabaseSync,
+  worldId: string,
+  characterId: string,
+  budgets: MemoryBudgets = DEFAULT_BUDGETS,
+): ConsolidationResult {
+  const recent = consolidateRecent(db, worldId, characterId, budgets)
+  const significant = consolidateSignificant(db, worldId, characterId, budgets)
+  return {
+    evictedRecent: recent.evictedRecent,
+    promotedRecent: recent.promotedRecent,
+    mergedSignificant: significant.mergedSignificant,
   }
-
-  return result
 }
 
 export interface RelationshipEvictionResult {
