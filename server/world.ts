@@ -33,6 +33,7 @@ export interface CharacterRow {
   location_id: string
   role: string
   energy: number
+  health: number
   household_id: string
 }
 
@@ -147,6 +148,8 @@ export class RuleError extends Error {
 }
 
 export const MAX_ENERGY = 2
+const MIN_ENERGY = -2
+const SICK_THRESHOLD = 20
 export const FOOD_RESOURCES = ['зерно', 'рыба', 'овощи'] as const
 
 const FORAGE_PHASE = 1 // фаза «день»
@@ -389,6 +392,7 @@ function simulatePhase(db: DatabaseSync, worldId: string, day: number, phase: nu
 
   if (phase === 3) {
     settleObligations(db, worldId, day)
+    tickIllness(db, worldId, day, phase)
   }
 }
 
@@ -502,8 +506,12 @@ function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: 
   const role = ROLES[c.role]
   if (!role || role.yieldPerWork <= 0) return
 
-  if (c.energy < 1) {
-    logEvent(db, worldId, day, phase, 'rest', { characterId: c.id, characterName: c.name, reason: 'усталость' })
+  if (c.health < SICK_THRESHOLD) {
+    logEvent(db, worldId, day, phase, 'sick', { characterId: c.id, characterName: c.name })
+    return
+  }
+  if (c.energy <= MIN_ENERGY) {
+    logEvent(db, worldId, day, phase, 'rest', { characterId: c.id, characterName: c.name, reason: 'истощение' })
     return
   }
 
@@ -531,7 +539,12 @@ function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: 
     )
   }
 
-  db.prepare('UPDATE characters SET energy = energy - 1 WHERE world_id = ? AND id = ?').run(worldId, c.id)
+  const newEnergy = c.energy - 1
+  db.prepare('UPDATE characters SET energy = ? WHERE world_id = ? AND id = ?').run(newEnergy, worldId, c.id)
+  if (newEnergy < 0) {
+    db.prepare('UPDATE characters SET health = MAX(0, health - 10) WHERE world_id = ? AND id = ?').run(worldId, c.id)
+    logEvent(db, worldId, day, phase, 'overwork', { characterId: c.id, characterName: c.name })
+  }
   addStock(db, worldId, 'character', c.id, role.produces, amount)
   logEvent(db, worldId, day, phase, 'work', {
     characterId: c.id,
@@ -557,11 +570,31 @@ function eat(db: DatabaseSync, worldId: string, day: number, phase: number, c: C
     }
   }
   logEvent(db, worldId, day, phase, 'hunger', { characterId: c.id, characterName: c.name })
+  db.prepare('UPDATE characters SET health = MAX(0, health - 15) WHERE world_id = ? AND id = ?').run(worldId, c.id)
 }
 
 function sleep(db: DatabaseSync, worldId: string, day: number, phase: number, c: CharacterRow): void {
   db.prepare('UPDATE characters SET energy = ? WHERE world_id = ? AND id = ?').run(MAX_ENERGY, worldId, c.id)
+  db.prepare('UPDATE characters SET health = MIN(100, health + 10) WHERE world_id = ? AND id = ?').run(worldId, c.id)
   logEvent(db, worldId, day, phase, 'sleep', { characterId: c.id, characterName: c.name })
+}
+
+/** Случайная болезнь (детерминированно от seed + день + индекс). */
+function tickIllness(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const world = getWorld(db, worldId)
+  const chars = db
+    .prepare('SELECT id, name FROM characters WHERE world_id = ? ORDER BY id')
+    .all(worldId) as unknown as Array<{ id: string; name: string }>
+
+  let idx = 0
+  for (const c of chars) {
+    const rng = mulberry32((world.seed + day * 0x9e3779b9 + idx * 0x85ebca6b) >>> 0)
+    idx++
+    if (rng() < 0.05) {
+      db.prepare('UPDATE characters SET health = MAX(0, health - 20) WHERE world_id = ? AND id = ?').run(worldId, c.id)
+      logEvent(db, worldId, day, phase, 'illness', { characterId: c.id, characterName: c.name })
+    }
+  }
 }
 
 function settleObligations(db: DatabaseSync, worldId: string, day: number): void {
@@ -676,8 +709,8 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
     }
     for (const chr of DEFAULT_CHARACTERS) {
       db.prepare(
-        'INSERT INTO characters (world_id, id, name, location_id, role, energy, household_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(id, chr.id, chr.name, chr.locationId, chr.role, MAX_ENERGY, chr.householdId)
+        'INSERT INTO characters (world_id, id, name, location_id, role, energy, household_id, health) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, chr.id, chr.name, chr.locationId, chr.role, MAX_ENERGY, chr.householdId, 100)
     }
     for (const s of INITIAL_STOCK) {
       db.prepare('INSERT INTO stock (world_id, holder_type, holder_id, resource, quantity) VALUES (?, ?, ?, ?, ?)').run(
