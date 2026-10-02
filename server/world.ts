@@ -210,11 +210,25 @@ const FIELD_HARVEST: Record<string, number> = {
 }
 // скот: корм (зерно в день), продукт, тяга
 // скот: корм (сено в день), продукт, тяга
-const LIVESTOCK: Record<string, { title: string; feed: number; product?: string; productPerDay?: number; traction?: boolean }> = {
-  корова: { title: 'корова', feed: 1, product: 'молоко', productPerDay: 1 },
-  птица: { title: 'птица', feed: 1, product: 'яйца', productPerDay: 1 },
-  вол: { title: 'вол', feed: 2, traction: true },
+interface CreatureDef {
+  id: string
+  title: string
+  feed: { resource: string; amount: number }
+  product?: { resource: string; amount: number }
+  traction?: boolean
+  fedBonus: number
+  hungerPenalty: number
+  illnessChance: number
+  illnessPenalty: number
 }
+
+// Декларативные существа (D-039 шаг 3): добавить существо = добавить запись; обсчёт автоматический.
+const CREATURE_DEFS: CreatureDef[] = [
+  { id: 'корова', title: 'корова', feed: { resource: 'сено', amount: 1 }, product: { resource: 'молоко', amount: 1 }, fedBonus: 5, hungerPenalty: 20, illnessChance: 0.08, illnessPenalty: 30 },
+  { id: 'птица', title: 'птица', feed: { resource: 'сено', amount: 1 }, product: { resource: 'яйца', amount: 1 }, fedBonus: 5, hungerPenalty: 20, illnessChance: 0.08, illnessPenalty: 30 },
+  { id: 'вол', title: 'вол', feed: { resource: 'сено', amount: 2 }, traction: true, fedBonus: 5, hungerPenalty: 20, illnessChance: 0.08, illnessPenalty: 30 },
+  { id: 'гусь', title: 'гусь', feed: { resource: 'сено', amount: 1 }, product: { resource: 'яйца', amount: 1 }, fedBonus: 5, hungerPenalty: 20, illnessChance: 0.08, illnessPenalty: 30 },
+]
 const COIN = 'монеты'
 
 const TRADER_MONEY = 40
@@ -292,6 +306,7 @@ const INITIAL_LIVESTOCK = [
   { householdId: 'hh-jan', kind: 'птица', id: 'птица-1', name: null, age: 60 },
   { householdId: 'hh-jan', kind: 'птица', id: 'птица-2', name: null, age: 60 },
   { householdId: 'hh-inn', kind: 'птица', id: 'птица-3', name: null, age: 90 },
+  { householdId: 'hh-inn', kind: 'гусь', id: 'гусь-1', name: null, age: 120 },
 ]
 
 const INITIAL_HIVES = [
@@ -510,7 +525,7 @@ function tickSeason(db: DatabaseSync, worldId: string, day: number, phase: numbe
     producePlotResource(db, worldId, day, phase, 'огород', 'овощи', 'garden_harvest')
     producePlotResource(db, worldId, day, phase, 'луг', 'сено', 'hay_harvest')
   }
-  tickLivestock(db, worldId, day, phase)
+  tickCreatures(db, worldId, day, phase)
   tickHives(db, worldId, day, phase)
 }
 
@@ -603,39 +618,38 @@ function producePlotResource(db: DatabaseSync, worldId: string, day: number, pha
 }
 
 /** Скот ест корм, даёт продукт, болеет и может пасть. */
-function tickLivestock(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+function tickCreatures(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   const world = getWorld(db, worldId)
   const rows = db
     .prepare('SELECT * FROM livestock WHERE world_id = ? ORDER BY id')
     .all(worldId) as unknown as LivestockRow[]
 
   for (const lv of rows) {
-    const spec = LIVESTOCK[lv.kind]
-    if (!spec) continue
+    const def = CREATURE_DEFS.find((d) => d.id === lv.kind)
+    if (!def) continue
 
-    // корм (сено) — каждая голова ест свою норму
-    const fed = consumeFromHousehold(db, worldId, lv.household_id, 'сено', spec.feed)
+    // корм — каждая особь ест свою норму
+    const fed = consumeFromHousehold(db, worldId, lv.household_id, def.feed.resource, def.feed.amount)
 
     // здоровье
     let health = lv.health
-    if (fed >= spec.feed) {
-      health = Math.min(100, health + 5)
+    if (fed >= def.feed.amount) {
+      health = Math.min(100, health + def.fedBonus)
     } else {
-      health = Math.max(0, health - 20)
+      health = Math.max(0, health - def.hungerPenalty)
     }
 
     // болезнь (детерминированно от seed + день + id особи)
     const rng = mulberry32((world.seed + day * 0x9e3779b9 + hashString(lv.id)) >>> 0)
-    if (rng() < 0.08) {
-      health = Math.max(0, health - 30)
+    if (rng() < def.illnessChance) {
+      health = Math.max(0, health - def.illnessPenalty)
       logEvent(db, worldId, day, phase, 'livestock_illness', { householdId: lv.household_id, livestockId: lv.id, kind: lv.kind, name: lv.name })
     }
 
     // продукт
-    if (health >= 40 && spec.product) {
-      const amount = spec.productPerDay ?? 1
-      distributeToHousehold(db, worldId, lv.household_id, spec.product, amount)
-      logEvent(db, worldId, day, phase, 'livestock_produce', { householdId: lv.household_id, livestockId: lv.id, kind: lv.kind, name: lv.name, resource: spec.product, amount })
+    if (health >= 40 && def.product) {
+      distributeToHousehold(db, worldId, lv.household_id, def.product.resource, def.product.amount)
+      logEvent(db, worldId, day, phase, 'livestock_produce', { householdId: lv.household_id, livestockId: lv.id, kind: lv.kind, name: lv.name, resource: def.product.resource, amount: def.product.amount })
     }
 
     // навоз → удобрение поля

@@ -67,8 +67,8 @@ test('скот — особи: у каждой своё состояние (им
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
 
-  // 6 особей, а не 4 «стада»
-  assert.equal(s.livestock.length, 6)
+  // 7 особей (включая гуся), а не «стада»
+  assert.equal(s.livestock.length, 7)
 
   const burёnka = s.livestock.find((l) => l.id === 'корова-бурёнка')
   assert.ok(burёnka, 'корова-особь есть')
@@ -89,4 +89,20 @@ test('особь стареет со временем', () => {
   const st = getWorldState(db, id)
   const after = st.livestock.find((l) => l.id === 'корова-бурёнка')!.age
   assert.ok(after > before, 'корова стареет')
+})
+
+test('декларативное существо (гусь) работает без нового кода тика', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+
+  // гусь добавлен записью (в CREATURE_DEFS + INITIAL_LIVESTOCK), без нового tick-кода
+  assert.ok(s.livestock.some((l) => l.kind === 'гусь'), 'гусь есть')
+
+  runDays(db, id, 7)
+  const st = getWorldState(db, id)
+  assert.ok(
+    st.events.some((e) => e.type === 'livestock_produce' && (e.payload as { kind?: string }).kind === 'гусь'),
+    'гусь даёт продукт из декларативной записи',
+  )
 })
