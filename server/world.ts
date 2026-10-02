@@ -225,8 +225,8 @@ function isSeasonStart(day: number): boolean {
   return (day - 1) % DAYS_PER_SEASON === 0
 }
 
-/** Множитель восстановления ресурсов по погоде. */
-const WEATHER_REGEN: Record<string, number> = {
+/** Множитель восстановления ресурсов и флоры по погоде. */
+export const WEATHER_REGEN: Record<string, number> = {
   солнечно: 1,
   дождливо: 1.5,
   засуха: 0.4,
@@ -236,7 +236,7 @@ const WEATHER_REGEN: Record<string, number> = {
 }
 
 /** Погода дня — детерминированно от seed и дня (без отдельной таблицы). */
-function weatherOfDay(seed: number, day: number): string {
+export function weatherOfDay(seed: number, day: number): string {
   const season = seasonOfDay(day)
   const rng = mulberry32((seed + day * 0x27d4eb2f) >>> 0)
   const r = rng()
@@ -923,12 +923,14 @@ function degradeFlora(db: DatabaseSync, worldId: string, locationId: string, kin
   db.prepare('UPDATE flora SET density = MAX(0, density - 0.1) WHERE world_id = ? AND location_id = ? AND kind = ?').run(worldId, locationId, kind)
 }
 
-/** Флора восстанавливается раз в год (весной) и стравливается травоядными. */
+/** Флора восстанавливается раз в год (весной, с поправкой на погоду) и стравливается травоядными. */
 function tickFlora(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   if (day <= 1 || !isSeasonStart(day) || seasonOfDay(day) !== 'весна') return
+  const world = getWorld(db, worldId)
+  const weatherFactor = WEATHER_REGEN[weatherOfDay(world.seed, day)] ?? 1
   // восстановление
   for (const f of FLORA) {
-    db.prepare('UPDATE flora SET density = MIN(1, density + ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(f.regenPerYear, worldId, f.locationId, f.kind)
+    db.prepare('UPDATE flora SET density = MIN(1, density + ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(f.regenPerYear * weatherFactor, worldId, f.locationId, f.kind)
   }
   // стравливание травоядными
   for (const fa of FAUNA) {
