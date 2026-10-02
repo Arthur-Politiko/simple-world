@@ -330,16 +330,17 @@ interface FaunaDef {
   initial: number
   reproduce: number // весенний прирост (доля)
   winterLoss: number // зимняя убыль (доля)
+  capacity: number // ёмкость (потолок популяции)
   game?: boolean // дичь (на неё охотятся)
   predator?: string // кого ест (kind)
 }
 
 // Фауна-популяции (D-041 слой 3): «стая»/«семья» как недо-FSM, не особи.
 const FAUNA: FaunaDef[] = [
-  { locationId: 'loc-forest', kind: 'заяц', title: 'заяц', initial: 20, reproduce: 0.6, winterLoss: 0.4, game: true },
-  { locationId: 'loc-forest', kind: 'тетерев', title: 'тетерев', initial: 10, reproduce: 0.5, winterLoss: 0.3, game: true },
-  { locationId: 'loc-forest', kind: 'кабан', title: 'кабан', initial: 8, reproduce: 0.3, winterLoss: 0.2, game: true },
-  { locationId: 'loc-forest', kind: 'лиса', title: 'лиса', initial: 5, reproduce: 0.3, winterLoss: 0.3, predator: 'заяц' },
+  { locationId: 'loc-forest', kind: 'заяц', title: 'заяц', initial: 20, reproduce: 0.8, winterLoss: 0.25, capacity: 40, game: true },
+  { locationId: 'loc-forest', kind: 'тетерев', title: 'тетерев', initial: 10, reproduce: 0.5, winterLoss: 0.3, capacity: 20, game: true },
+  { locationId: 'loc-forest', kind: 'кабан', title: 'кабан', initial: 8, reproduce: 0.3, winterLoss: 0.2, capacity: 15, game: true },
+  { locationId: 'loc-forest', kind: 'лиса', title: 'лиса', initial: 5, reproduce: 0.3, winterLoss: 0.3, capacity: 8, predator: 'заяц' },
 ]
 
 const GAME_LOCATION = 'loc-forest'
@@ -454,9 +455,10 @@ const DEFAULT_GOALS = [
 ]
 
 const DEFAULT_OBLIGATIONS = [
-  { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 10, dueDay: 7 },
   { characterId: 'chr-grzegorz', recipient: 'сеньор', resource: 'дрова', amount: 6, dueDay: 7 },
-  { characterId: 'chr-tomas', recipient: 'сеньор', resource: 'зерно', amount: 10, dueDay: 10 },
+  // зерновой оброк и десятина — осенью, после жатвы (весной зерно посеяно, платить нечем)
+  { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 10, dueDay: 20 },
+  { characterId: 'chr-tomas', recipient: 'сеньор', resource: 'зерно', amount: 10, dueDay: 20 },
   { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 20, dueDay: 20 },
   { characterId: 'chr-grzegorz', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 20 },
   { characterId: 'chr-jan', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 20 },
@@ -804,7 +806,7 @@ function tickHives(db: DatabaseSync, worldId: string, day: number, phase: number
   for (const h of hives) {
     let strength = h.strength
     if (season === 'зима') {
-      strength = Math.max(0, strength - 20)
+      strength = Math.max(0, strength - 5)
     } else {
       strength = Math.min(100, strength + (season === 'весна' ? 10 : 5))
     }
@@ -953,14 +955,14 @@ function takeGame(db: DatabaseSync, worldId: string, locationId: string, amount:
   return taken
 }
 
-/** Фауна: весной размножается, зимой несёт потери; лиса ест зайца. */
+/** Фауна: весной размножается (до ёмкости), зимой несёт потери; лиса ест зайца. */
 function tickFauna(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   if (day <= 1 || !isSeasonStart(day)) return
   const season = seasonOfDay(day)
   for (const f of FAUNA) {
     const cur = faunaCount(db, worldId, f.locationId, f.kind)
     if (season === 'весна') {
-      setFauna(db, worldId, f.locationId, f.kind, cur * (1 + f.reproduce))
+      setFauna(db, worldId, f.locationId, f.kind, Math.min(f.capacity, cur * (1 + f.reproduce)))
     } else if (season === 'зима') {
       setFauna(db, worldId, f.locationId, f.kind, cur * (1 - f.winterLoss))
     }
@@ -971,7 +973,7 @@ function tickFauna(db: DatabaseSync, worldId: string, day: number, phase: number
       if (!f.predator) continue
       const predatorCount = faunaCount(db, worldId, f.locationId, f.kind)
       const preyCount = faunaCount(db, worldId, f.locationId, f.predator)
-      const eaten = Math.min(preyCount, Math.round(predatorCount * 2))
+      const eaten = Math.min(preyCount, predatorCount)
       if (eaten > 0) setFauna(db, worldId, f.locationId, f.predator, preyCount - eaten)
     }
   }

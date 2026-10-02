@@ -57,11 +57,11 @@ test('обязательства урегулируются к сроку', () =
 
   const st = getWorldState(db, id)
   const settled = st.obligations.filter((o) => o.status !== 'pending')
-  assert.ok(settled.length >= 2, 'обязательства на день 7 должны быть урегулированы')
+  assert.ok(settled.length >= 1, 'обязательства на день 7 (дрова) должны быть урегулированы')
   for (const o of settled) {
     assert.ok(o.status === 'fulfilled' || o.status === 'failed')
   }
-  // Томаш (срок — день 10) ещё в ожидании
+  // Томаш (зерновой оброк — день 20) ещё в ожидании
   const tomas = st.obligations.find((o) => o.character_id === 'chr-tomas')
   assert.equal(tomas?.status, 'pending')
 })

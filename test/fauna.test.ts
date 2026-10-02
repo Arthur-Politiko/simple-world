@@ -24,14 +24,13 @@ test('охота истощает дичь (популяции фауны)', () 
   assert.equal(after, before - 5, 'дичь убавилась на собранное')
 })
 
-test('фауна размножается и несёт потери по сезонам', () => {
+test('фауна размножается и несёт потери по сезонам (устойчива, не вымирает)', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
   const id = s.world.id
 
-  const before = s.fauna.find((f) => f.kind === 'заяц')!.count
-  runDays(db, id, 28) // полный год (весна размножение + зима потери)
+  runDays(db, id, 28) // полный год (весна размножение + зима потери + хищничество)
   const st = getWorldState(db, id)
   const after = st.fauna.find((f) => f.kind === 'заяц')!.count
-  assert.notEqual(after, before, 'численность зайца изменилась за год')
+  assert.ok(after > 0 && after <= 40, 'заяц устойчив (не вымер, не расплодился бесконтрольно)')
 })
