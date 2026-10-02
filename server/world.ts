@@ -153,6 +153,13 @@ export interface LocationResourceRow {
   capacity: number
 }
 
+export interface FloraRow {
+  world_id: string
+  location_id: string
+  kind: string
+  density: number
+}
+
 export interface WorldState {
   world: WorldRow
   phaseName: string
@@ -172,6 +179,7 @@ export interface WorldState {
   trader: TraderRow
   events: EventRow[]
   locationResources: LocationResourceRow[]
+  flora: FloraRow[]
 }
 
 /** Действие отклонено игровым правилом. */
@@ -264,6 +272,28 @@ const RESOURCE_LOCATION: Record<string, string> = {
   рыба: 'loc-river',
   ягоды: 'loc-forest',
   дичь: 'loc-forest',
+}
+
+interface FloraDef {
+  locationId: string
+  kind: string
+  title: string
+  initial: number // начальная плотность 0..1
+  regenPerYear: number // восстановление плотности в год
+}
+
+// Флора-агрегаты (D-041 слой 2): «лес»/«кустарник»/«ивняк» — плотность, а не отдельные растения.
+const FLORA: FloraDef[] = [
+  { locationId: 'loc-forest', kind: 'лес', title: 'лес', initial: 0.9, regenPerYear: 0.05 },
+  { locationId: 'loc-forest', kind: 'кустарник', title: 'кустарник', initial: 0.6, regenPerYear: 0.1 },
+  { locationId: 'loc-river', kind: 'ивняк', title: 'ивняк', initial: 0.7, regenPerYear: 0.1 },
+]
+
+// Ресурс «из флоры» → вид флоры, который оскудевает при истощении.
+const FLORA_RESOURCE_LINK: Record<string, { locationId: string; kind: string }> = {
+  дрова: { locationId: 'loc-forest', kind: 'лес' },
+  ягоды: { locationId: 'loc-forest', kind: 'кустарник' },
+  дичь: { locationId: 'loc-forest', kind: 'лес' },
 }
 const COIN = 'монеты'
 
@@ -522,6 +552,7 @@ export const TICK_REGISTRY: TickEntry[] = [
   { name: 'season', phases: [0], tick: tickSeason },
   { name: 'church', phases: [0], tick: tickChurch },
   { name: 'locationResources', phases: [0], tick: tickLocationResources },
+  { name: 'flora', phases: [0], tick: tickFlora },
   { name: 'characters', tick: tickCharacters },
   { name: 'dependents', phases: [1], tick: tickDependents },
   { name: 'obligations', phases: [3], tick: tickObligations },
@@ -777,7 +808,9 @@ function tickLocationResources(db: DatabaseSync, worldId: string, day: number, p
         .prepare('SELECT amount FROM location_resources WHERE world_id = ? AND location_id = ? AND resource = ?')
         .get(worldId, locationId, def.resource) as { amount: number } | undefined
       if (!row) continue
-      const next = Math.min(def.capacity, row.amount + def.regen)
+      const density = floraDensityOf(db, worldId, locationId, def.resource)
+      const cap = def.capacity * density
+      const next = Math.min(cap, row.amount + def.regen * density)
       if (next !== row.amount) {
         db.prepare('UPDATE location_resources SET amount = ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(next, worldId, locationId, def.resource)
       }
@@ -803,7 +836,35 @@ function takeFromLocation(db: DatabaseSync, worldId: string, locationId: string,
   if (got > 0) {
     db.prepare('UPDATE location_resources SET amount = amount - ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(got, worldId, locationId, resource)
   }
+  if (got < amount) {
+    // истощили — связанная флора оскудела
+    const link = FLORA_RESOURCE_LINK[resource]
+    if (link) degradeFlora(db, worldId, link.locationId, link.kind)
+  }
   return got
+}
+
+/** Плотность флоры, питающей ресурс (1 — ресурс не из флоры). */
+function floraDensityOf(db: DatabaseSync, worldId: string, locationId: string, resource: string): number {
+  const link = FLORA_RESOURCE_LINK[resource]
+  if (!link) return 1
+  const row = db
+    .prepare('SELECT density FROM flora WHERE world_id = ? AND location_id = ? AND kind = ?')
+    .get(worldId, link.locationId, link.kind) as { density: number } | undefined
+  return row?.density ?? 1
+}
+
+/** Оскудить флору (при истощении ресурса). */
+function degradeFlora(db: DatabaseSync, worldId: string, locationId: string, kind: string): void {
+  db.prepare('UPDATE flora SET density = MAX(0, density - 0.1) WHERE world_id = ? AND location_id = ? AND kind = ?').run(worldId, locationId, kind)
+}
+
+/** Флора восстанавливается раз в год (весной). */
+function tickFlora(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  if (day <= 1 || !isSeasonStart(day) || seasonOfDay(day) !== 'весна') return
+  for (const f of FLORA) {
+    db.prepare('UPDATE flora SET density = MIN(1, density + ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(f.regenPerYear, worldId, f.locationId, f.kind)
+  }
 }
 
 /** Весенний посев: двор тратит зерно на семена (цель — размер поля / 3). */
@@ -1132,6 +1193,10 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
           def.capacity,
         )
       }
+    }
+    // флора-агрегаты (лес, кустарник, ивняк)
+    for (const f of FLORA) {
+      db.prepare('INSERT INTO flora (world_id, location_id, kind, density) VALUES (?, ?, ?, ?)').run(id, f.locationId, f.kind, f.initial)
     }
     for (const hh of DEFAULT_HOUSEHOLDS) {
       db.prepare('INSERT INTO households (world_id, id, name, location_id) VALUES (?, ?, ?, ?)').run(
@@ -1495,6 +1560,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
   const locationResources = db
     .prepare('SELECT * FROM location_resources WHERE world_id = ? ORDER BY location_id, resource')
     .all(worldId) as unknown as LocationResourceRow[]
+  const flora = db.prepare('SELECT * FROM flora WHERE world_id = ? ORDER BY location_id, kind').all(worldId) as unknown as FloraRow[]
   const events = db
     .prepare('SELECT * FROM events WHERE world_id = ? ORDER BY day, phase, seq')
     .all(worldId) as unknown as RawEventRow[]
@@ -1517,6 +1583,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     knowledge: knowledge.map((k) => ({ ...k, event_id: k.event_id ?? null, is_true: k.is_true === 1 })),
     trader,
     locationResources,
+    flora,
     events: events.map((e) => ({
       id: e.id,
       world_id: e.world_id,

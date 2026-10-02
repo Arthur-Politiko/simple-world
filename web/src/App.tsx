@@ -97,6 +97,7 @@ interface WorldState {
   hives?: Hive[]
   dependents?: Dependent[]
   locationResources?: { location_id: string; resource: string; amount: number; capacity: number }[]
+  flora?: { location_id: string; kind: string; density: number }[]
   stock: StockItem[]
   goals: Goal[]
   obligations: Obligation[]
@@ -510,6 +511,10 @@ export default function App() {
               )
             })}
           </ul>
+          <p>
+            Флора (плотность):{' '}
+            {(world.flora ?? []).map((f) => `${f.kind} ${Math.round(f.density * 100)}%`).join(' · ') || '—'}
+          </p>
 
           <h2>Семья (домочадцы)</h2>
           <ul>

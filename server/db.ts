@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 17
+export const SCHEMA_VERSION = 18
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -176,6 +176,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 14) migrateV14ToV15(db)
   if (currentVersion <= 15) migrateV15ToV16(db)
   if (currentVersion <= 16) migrateV16ToV17(db)
+  if (currentVersion <= 17) migrateV17ToV18(db)
   assertSchemaVersion(db)
 }
 
@@ -551,6 +552,27 @@ function migrateV16ToV17(db: DatabaseSync): void {
         amount REAL NOT NULL DEFAULT 0,
         capacity REAL NOT NULL DEFAULT 0,
         PRIMARY KEY (world_id, location_id, resource)
+      )
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('17')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Живая местность (слой 2): флора-агрегаты (лес/кустарник/ивняк) — плотность 0..1. */
+function migrateV17ToV18(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS flora (
+        world_id TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        density REAL NOT NULL DEFAULT 1,
+        PRIMARY KEY (world_id, location_id, kind)
       )
     `)
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
