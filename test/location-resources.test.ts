@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { openDb } from '../server/db'
-import { createWorld, gather, getWorldState, moveCharacter, runDays } from '../server/world'
+import { advancePhase, createWorld, gather, getWorldState, moveCharacter, runDays } from '../server/world'
 
 test('живая местность: лес и река имеют истощаемые запасы', () => {
   const db = openDb(':memory:')
@@ -37,4 +37,27 @@ test('запас локации восстанавливается со врем
   const st1 = getWorldState(db, id)
   const after = st1.locationResources.find((r) => r.location_id === 'loc-forest' && r.resource === 'дрова')!.amount
   assert.ok(after > depleted, 'дрова восстановились')
+})
+
+test('лесоруб истощает лес при работе', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  const before = s.locationResources.find((r) => r.location_id === 'loc-forest' && r.resource === 'дрова')!.amount
+
+  advancePhase(db, id) // день (еда)
+  const st = advancePhase(db, id) // вечер (работа) — лесоруб берёт дрова
+  const after = st.locationResources.find((r) => r.location_id === 'loc-forest' && r.resource === 'дрова')!.amount
+  assert.ok(after < before, 'лесоруб забрал дрова из леса')
+})
+
+test('вырубленный лес останавливает лесоруба', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  db.prepare("UPDATE location_resources SET amount = 0 WHERE world_id = ? AND location_id = 'loc-forest' AND resource = 'дрова'").run(id)
+
+  advancePhase(db, id) // день
+  const st = advancePhase(db, id) // вечер (работа) — дров нет
+  assert.ok(st.events.some((e) => e.type === 'resource_depleted'), 'лесоруб упёрся в пустой лес')
 })

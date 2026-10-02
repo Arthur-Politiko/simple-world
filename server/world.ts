@@ -249,13 +249,21 @@ interface LocationResourceDef {
 // Масштаб — ~1/3 от справки «Местность и её масштаб» (4 двора против 12).
 const LOCATION_RESOURCES: Record<string, LocationResourceDef[]> = {
   'loc-forest': [
-    { resource: 'дрова', capacity: 60, initial: 40, regen: 1, seasons: ['весна', 'лето', 'осень'] },
+    { resource: 'дрова', capacity: 60, initial: 40, regen: 3, seasons: ['весна', 'лето', 'осень'] },
     { resource: 'ягоды', capacity: 20, initial: 10, regen: 2, seasons: ['лето', 'осень'] },
     { resource: 'дичь', capacity: 15, initial: 10, regen: 1, seasons: ['весна', 'лето'] },
   ],
   'loc-river': [
-    { resource: 'рыба', capacity: 40, initial: 30, regen: 1, seasons: ['весна', 'лето', 'осень'] },
+    { resource: 'рыба', capacity: 40, initial: 30, regen: 3, seasons: ['весна', 'лето', 'осень'] },
   ],
+}
+
+// Ресурс «из природы» → локация, которую он истощает (ремесло/поле — не истощают).
+const RESOURCE_LOCATION: Record<string, string> = {
+  дрова: 'loc-forest',
+  рыба: 'loc-river',
+  ягоды: 'loc-forest',
+  дичь: 'loc-forest',
 }
 const COIN = 'монеты'
 
@@ -777,6 +785,27 @@ function tickLocationResources(db: DatabaseSync, worldId: string, day: number, p
   }
 }
 
+/** Текущий запас ресурса в локации (null — ресурс не из живой местности). */
+function locationResourceAmount(db: DatabaseSync, worldId: string, locationId: string, resource: string): number | null {
+  const row = db
+    .prepare('SELECT amount FROM location_resources WHERE world_id = ? AND location_id = ? AND resource = ?')
+    .get(worldId, locationId, resource) as { amount: number } | undefined
+  return row ? row.amount : null
+}
+
+/** Взять ресурс из локации (истощает); вернёт фактически взятое (0, если пусто). */
+function takeFromLocation(db: DatabaseSync, worldId: string, locationId: string, resource: string, amount: number): number {
+  const row = db
+    .prepare('SELECT amount FROM location_resources WHERE world_id = ? AND location_id = ? AND resource = ?')
+    .get(worldId, locationId, resource) as { amount: number } | undefined
+  if (!row) return amount // ресурс не из живой местности — не истощаем
+  const got = Math.min(row.amount, amount)
+  if (got > 0) {
+    db.prepare('UPDATE location_resources SET amount = amount - ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(got, worldId, locationId, resource)
+  }
+  return got
+}
+
 /** Весенний посев: двор тратит зерно на семена (цель — размер поля / 3). */
 function sowFields(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   const fields = db
@@ -863,16 +892,31 @@ function work(db: DatabaseSync, worldId: string, day: number, phase: number, c: 
     }
   }
 
-  // вторичное ремесло
+  // вторичное ремесло (сырьё «из природы» истощает локацию)
   if (role.specialty) {
-    addStock(db, worldId, 'character', c.id, role.specialty.resource, role.specialty.amount)
-    logEvent(db, worldId, day, phase, 'work', {
-      characterId: c.id,
-      characterName: c.name,
-      role: role.title,
-      resource: role.specialty.resource,
-      amount: role.specialty.amount,
-    })
+    const loc = RESOURCE_LOCATION[role.specialty.resource]
+    let produced = role.specialty.amount
+    if (loc) {
+      produced = takeFromLocation(db, worldId, loc, role.specialty.resource, role.specialty.amount)
+      if (produced <= 0) {
+        logEvent(db, worldId, day, phase, 'resource_depleted', {
+          characterId: c.id,
+          characterName: c.name,
+          resource: role.specialty.resource,
+          locationId: loc,
+        })
+      }
+    }
+    if (produced > 0) {
+      addStock(db, worldId, 'character', c.id, role.specialty.resource, produced)
+      logEvent(db, worldId, day, phase, 'work', {
+        characterId: c.id,
+        characterName: c.name,
+        role: role.title,
+        resource: role.specialty.resource,
+        amount: produced,
+      })
+    }
   }
 
   const newEnergy = c.energy - 1
@@ -1282,22 +1326,15 @@ export function gather(db: DatabaseSync, worldId: string, characterId: string, r
   }
 
   // живая местность: сбор истощает запас локации (если ресурс в ней водится)
-  const pool = db
-    .prepare('SELECT amount FROM location_resources WHERE world_id = ? AND location_id = ? AND resource = ?')
-    .get(worldId, chr.location_id, resource) as { amount: number } | undefined
-  if (pool && pool.amount < amount) {
-    throw new RuleError(`в локации не хватает «${resource}»: есть ${pool.amount}, требуется ${amount}`)
+  const avail = locationResourceAmount(db, worldId, chr.location_id, resource)
+  if (avail !== null && avail < amount) {
+    throw new RuleError(`в локации не хватает «${resource}»: есть ${avail}, требуется ${amount}`)
   }
 
   db.exec('BEGIN')
   try {
-    if (pool) {
-      db.prepare('UPDATE location_resources SET amount = amount - ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(
-        amount,
-        worldId,
-        chr.location_id,
-        resource,
-      )
+    if (avail !== null) {
+      takeFromLocation(db, worldId, chr.location_id, resource, amount)
     }
     addStock(db, worldId, 'character', characterId, resource, amount)
     logEvent(db, worldId, world.day, world.phase, 'gather', {
