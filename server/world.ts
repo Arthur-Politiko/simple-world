@@ -171,6 +171,7 @@ export interface WorldState {
   world: WorldRow
   phaseName: string
   season: string
+  weather: string
   locations: LocationRow[]
   households: HouseholdRow[]
   plots: PlotRow[]
@@ -222,6 +223,27 @@ function seasonOfDay(day: number): (typeof SEASON_NAMES)[number] {
 
 function isSeasonStart(day: number): boolean {
   return (day - 1) % DAYS_PER_SEASON === 0
+}
+
+/** Множитель восстановления ресурсов по погоде. */
+const WEATHER_REGEN: Record<string, number> = {
+  солнечно: 1,
+  дождливо: 1.5,
+  засуха: 0.4,
+  половодье: 1.3,
+  мороз: 0,
+  метель: 0,
+}
+
+/** Погода дня — детерминированно от seed и дня (без отдельной таблицы). */
+function weatherOfDay(seed: number, day: number): string {
+  const season = seasonOfDay(day)
+  const rng = mulberry32((seed + day * 0x27d4eb2f) >>> 0)
+  const r = rng()
+  if (season === 'зима') return r < 0.5 ? 'мороз' : 'метель'
+  if (season === 'весна') return r < 0.35 ? 'половодье' : r < 0.7 ? 'дождливо' : 'солнечно'
+  if (season === 'лето') return r < 0.3 ? 'дождливо' : r < 0.45 ? 'засуха' : 'солнечно'
+  return r < 0.4 ? 'дождливо' : 'солнечно' // осень
 }
 
 // распределение зерна по наделам дворов: у земледельцев поле больше
@@ -825,9 +847,12 @@ function tickChurch(db: DatabaseSync, worldId: string, day: number, phase: numbe
   }
 }
 
-/** Живая местность: восстановление ресурсов локаций (раз в день, по сезону). */
+/** Живая местность: восстановление ресурсов локаций (раз в день, по сезону и погоде). */
 function tickLocationResources(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const world = getWorld(db, worldId)
   const season = seasonOfDay(day)
+  const weather = weatherOfDay(world.seed, day)
+  const weatherFactor = WEATHER_REGEN[weather] ?? 1
   for (const [locationId, defs] of Object.entries(LOCATION_RESOURCES)) {
     for (const def of defs) {
       if (!def.seasons.includes(season)) continue
@@ -837,7 +862,7 @@ function tickLocationResources(db: DatabaseSync, worldId: string, day: number, p
       if (!row) continue
       const density = floraDensityOf(db, worldId, locationId, def.resource)
       const cap = def.capacity * density
-      const next = Math.min(cap, row.amount + def.regen * density)
+      const next = Math.min(cap, row.amount + def.regen * density * weatherFactor)
       if (next !== row.amount) {
         db.prepare('UPDATE location_resources SET amount = ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(next, worldId, locationId, def.resource)
       }
@@ -1684,6 +1709,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     world,
     phaseName: phaseName(world.phase),
     season: seasonOfDay(world.day),
+    weather: weatherOfDay(world.seed, world.day),
     locations,
     households,
     plots,

@@ -89,6 +89,7 @@ interface WorldState {
   world: { id: string; name: string; seed: number; day: number; phase: number }
   phaseName: string
   season?: string
+  weather?: string
   characters: Character[]
   locations: { id: string; name: string }[]
   households: { id: string; name: string }[]
@@ -416,7 +417,7 @@ export default function App() {
         <>
           <header style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
             <div>
-              <strong>День {world.world.day}</strong> · {world.season ?? '—'} · {world.phaseName} · seed {world.world.seed}
+              <strong>День {world.world.day}</strong> · {world.season ?? '—'} · {world.weather ?? '—'} · {world.phaseName} · seed {world.world.seed}
             </div>
             <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
             <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
