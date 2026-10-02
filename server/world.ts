@@ -160,6 +160,13 @@ export interface FloraRow {
   density: number
 }
 
+export interface FaunaRow {
+  world_id: string
+  location_id: string
+  kind: string
+  count: number
+}
+
 export interface WorldState {
   world: WorldRow
   phaseName: string
@@ -180,6 +187,7 @@ export interface WorldState {
   events: EventRow[]
   locationResources: LocationResourceRow[]
   flora: FloraRow[]
+  fauna: FaunaRow[]
 }
 
 /** Действие отклонено игровым правилом. */
@@ -259,7 +267,6 @@ const LOCATION_RESOURCES: Record<string, LocationResourceDef[]> = {
   'loc-forest': [
     { resource: 'дрова', capacity: 60, initial: 40, regen: 3, seasons: ['весна', 'лето', 'осень'] },
     { resource: 'ягоды', capacity: 20, initial: 10, regen: 2, seasons: ['лето', 'осень'] },
-    { resource: 'дичь', capacity: 15, initial: 10, regen: 1, seasons: ['весна', 'лето'] },
   ],
   'loc-river': [
     { resource: 'рыба', capacity: 40, initial: 30, regen: 3, seasons: ['весна', 'лето', 'осень'] },
@@ -271,7 +278,6 @@ const RESOURCE_LOCATION: Record<string, string> = {
   дрова: 'loc-forest',
   рыба: 'loc-river',
   ягоды: 'loc-forest',
-  дичь: 'loc-forest',
 }
 
 interface FloraDef {
@@ -293,8 +299,28 @@ const FLORA: FloraDef[] = [
 const FLORA_RESOURCE_LINK: Record<string, { locationId: string; kind: string }> = {
   дрова: { locationId: 'loc-forest', kind: 'лес' },
   ягоды: { locationId: 'loc-forest', kind: 'кустарник' },
-  дичь: { locationId: 'loc-forest', kind: 'лес' },
 }
+
+interface FaunaDef {
+  locationId: string
+  kind: string
+  title: string
+  initial: number
+  reproduce: number // весенний прирост (доля)
+  winterLoss: number // зимняя убыль (доля)
+  game?: boolean // дичь (на неё охотятся)
+  predator?: string // кого ест (kind)
+}
+
+// Фауна-популяции (D-041 слой 3): «стая»/«семья» как недо-FSM, не особи.
+const FAUNA: FaunaDef[] = [
+  { locationId: 'loc-forest', kind: 'заяц', title: 'заяц', initial: 20, reproduce: 0.6, winterLoss: 0.4, game: true },
+  { locationId: 'loc-forest', kind: 'тетерев', title: 'тетерев', initial: 10, reproduce: 0.5, winterLoss: 0.3, game: true },
+  { locationId: 'loc-forest', kind: 'кабан', title: 'кабан', initial: 8, reproduce: 0.3, winterLoss: 0.2, game: true },
+  { locationId: 'loc-forest', kind: 'лиса', title: 'лиса', initial: 5, reproduce: 0.3, winterLoss: 0.3, predator: 'заяц' },
+]
+
+const GAME_LOCATION = 'loc-forest'
 const COIN = 'монеты'
 
 const TRADER_MONEY = 40
@@ -553,6 +579,7 @@ export const TICK_REGISTRY: TickEntry[] = [
   { name: 'church', phases: [0], tick: tickChurch },
   { name: 'locationResources', phases: [0], tick: tickLocationResources },
   { name: 'flora', phases: [0], tick: tickFlora },
+  { name: 'fauna', phases: [0], tick: tickFauna },
   { name: 'characters', tick: tickCharacters },
   { name: 'dependents', phases: [1], tick: tickDependents },
   { name: 'obligations', phases: [3], tick: tickObligations },
@@ -864,6 +891,64 @@ function tickFlora(db: DatabaseSync, worldId: string, day: number, phase: number
   if (day <= 1 || !isSeasonStart(day) || seasonOfDay(day) !== 'весна') return
   for (const f of FLORA) {
     db.prepare('UPDATE flora SET density = MIN(1, density + ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(f.regenPerYear, worldId, f.locationId, f.kind)
+  }
+}
+
+function faunaCount(db: DatabaseSync, worldId: string, locationId: string, kind: string): number {
+  const row = db
+    .prepare('SELECT count FROM fauna WHERE world_id = ? AND location_id = ? AND kind = ?')
+    .get(worldId, locationId, kind) as { count: number } | undefined
+  return row?.count ?? 0
+}
+
+function setFauna(db: DatabaseSync, worldId: string, locationId: string, kind: string, count: number): void {
+  db.prepare('UPDATE fauna SET count = MAX(0, ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(Math.max(0, Math.round(count)), worldId, locationId, kind)
+}
+
+/** Дичь в локации = сумма охотничьих видов. */
+function gameAvailable(db: DatabaseSync, worldId: string, locationId: string): number {
+  return FAUNA.filter((f) => f.game && f.locationId === locationId).reduce((s, f) => s + faunaCount(db, worldId, locationId, f.kind), 0)
+}
+
+/** Охота: изъять дичь из популяций (пропорционально видам). */
+function takeGame(db: DatabaseSync, worldId: string, locationId: string, amount: number): number {
+  const game = FAUNA.filter((f) => f.game && f.locationId === locationId)
+  let remaining = amount
+  let taken = 0
+  for (const f of game) {
+    if (remaining <= 0) break
+    const c = faunaCount(db, worldId, locationId, f.kind)
+    const take = Math.min(c, remaining)
+    if (take > 0) {
+      setFauna(db, worldId, locationId, f.kind, c - take)
+      remaining -= take
+      taken += take
+    }
+  }
+  return taken
+}
+
+/** Фауна: весной размножается, зимой несёт потери; лиса ест зайца. */
+function tickFauna(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  if (day <= 1 || !isSeasonStart(day)) return
+  const season = seasonOfDay(day)
+  for (const f of FAUNA) {
+    const cur = faunaCount(db, worldId, f.locationId, f.kind)
+    if (season === 'весна') {
+      setFauna(db, worldId, f.locationId, f.kind, cur * (1 + f.reproduce))
+    } else if (season === 'зима') {
+      setFauna(db, worldId, f.locationId, f.kind, cur * (1 - f.winterLoss))
+    }
+  }
+  // хищничество зимой: лиса ест зайца
+  if (season === 'зима') {
+    for (const f of FAUNA) {
+      if (!f.predator) continue
+      const predatorCount = faunaCount(db, worldId, f.locationId, f.kind)
+      const preyCount = faunaCount(db, worldId, f.locationId, f.predator)
+      const eaten = Math.min(preyCount, Math.round(predatorCount * 2))
+      if (eaten > 0) setFauna(db, worldId, f.locationId, f.predator, preyCount - eaten)
+    }
   }
 }
 
@@ -1198,6 +1283,10 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
     for (const f of FLORA) {
       db.prepare('INSERT INTO flora (world_id, location_id, kind, density) VALUES (?, ?, ?, ?)').run(id, f.locationId, f.kind, f.initial)
     }
+    // фауна-популяции (заяц, тетерев, кабан, лиса)
+    for (const f of FAUNA) {
+      db.prepare('INSERT INTO fauna (world_id, location_id, kind, count) VALUES (?, ?, ?, ?)').run(id, f.locationId, f.kind, f.initial)
+    }
     for (const hh of DEFAULT_HOUSEHOLDS) {
       db.prepare('INSERT INTO households (world_id, id, name, location_id) VALUES (?, ?, ?, ?)').run(
         id,
@@ -1390,6 +1479,31 @@ export function gather(db: DatabaseSync, worldId: string, characterId: string, r
     throw new RuleError(`количество должно быть положительным целым: ${amount}`)
   }
 
+  // охота: дичь берётся из фауны (популяции дичи), а не из пула локации
+  if (resource === 'дичь') {
+    const avail = gameAvailable(db, worldId, GAME_LOCATION)
+    if (avail < amount) {
+      throw new RuleError(`в округе не хватает дичи: есть ${avail}, требуется ${amount}`)
+    }
+    db.exec('BEGIN')
+    try {
+      takeGame(db, worldId, GAME_LOCATION, amount)
+      addStock(db, worldId, 'character', characterId, resource, amount)
+      logEvent(db, worldId, world.day, world.phase, 'gather', {
+        characterId,
+        characterName: chr.name,
+        locationId: GAME_LOCATION,
+        resource,
+        amount,
+      })
+      db.exec('COMMIT')
+    } catch (e) {
+      db.exec('ROLLBACK')
+      throw e
+    }
+    return getWorldState(db, worldId)
+  }
+
   // живая местность: сбор истощает запас локации (если ресурс в ней водится)
   const avail = locationResourceAmount(db, worldId, chr.location_id, resource)
   if (avail !== null && avail < amount) {
@@ -1561,6 +1675,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     .prepare('SELECT * FROM location_resources WHERE world_id = ? ORDER BY location_id, resource')
     .all(worldId) as unknown as LocationResourceRow[]
   const flora = db.prepare('SELECT * FROM flora WHERE world_id = ? ORDER BY location_id, kind').all(worldId) as unknown as FloraRow[]
+  const fauna = db.prepare('SELECT * FROM fauna WHERE world_id = ? ORDER BY location_id, kind').all(worldId) as unknown as FaunaRow[]
   const events = db
     .prepare('SELECT * FROM events WHERE world_id = ? ORDER BY day, phase, seq')
     .all(worldId) as unknown as RawEventRow[]
@@ -1584,6 +1699,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     trader,
     locationResources,
     flora,
+    fauna,
     events: events.map((e) => ({
       id: e.id,
       world_id: e.world_id,

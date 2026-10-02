@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 18
+export const SCHEMA_VERSION = 19
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -177,6 +177,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 15) migrateV15ToV16(db)
   if (currentVersion <= 16) migrateV16ToV17(db)
   if (currentVersion <= 17) migrateV17ToV18(db)
+  if (currentVersion <= 18) migrateV18ToV19(db)
   assertSchemaVersion(db)
 }
 
@@ -572,6 +573,27 @@ function migrateV17ToV18(db: DatabaseSync): void {
         location_id TEXT NOT NULL,
         kind TEXT NOT NULL,
         density REAL NOT NULL DEFAULT 1,
+        PRIMARY KEY (world_id, location_id, kind)
+      )
+    `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('18')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Живая местность (слой 3): фауна-популяции (заяц/тетерев/кабан/лиса). */
+function migrateV18ToV19(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS fauna (
+        world_id TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        count REAL NOT NULL DEFAULT 0,
         PRIMARY KEY (world_id, location_id, kind)
       )
     `)

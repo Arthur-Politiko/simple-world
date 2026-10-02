@@ -98,6 +98,7 @@ interface WorldState {
   dependents?: Dependent[]
   locationResources?: { location_id: string; resource: string; amount: number; capacity: number }[]
   flora?: { location_id: string; kind: string; density: number }[]
+  fauna?: { location_id: string; kind: string; count: number }[]
   stock: StockItem[]
   goals: Goal[]
   obligations: Obligation[]
@@ -514,6 +515,10 @@ export default function App() {
           <p>
             Флора (плотность):{' '}
             {(world.flora ?? []).map((f) => `${f.kind} ${Math.round(f.density * 100)}%`).join(' · ') || '—'}
+          </p>
+          <p>
+            Фауна:{' '}
+            {(world.fauna ?? []).map((f) => `${f.kind} ${Math.round(f.count)}`).join(' · ') || '—'}
           </p>
 
           <h2>Семья (домочадцы)</h2>
