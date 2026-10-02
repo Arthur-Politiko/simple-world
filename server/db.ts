@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 16
+export const SCHEMA_VERSION = 17
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -175,6 +175,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 13) migrateV13ToV14(db)
   if (currentVersion <= 14) migrateV14ToV15(db)
   if (currentVersion <= 15) migrateV15ToV16(db)
+  if (currentVersion <= 16) migrateV16ToV17(db)
   assertSchemaVersion(db)
 }
 
@@ -530,6 +531,28 @@ function migrateV15ToV16(db: DatabaseSync): void {
     if (!columns.some((c) => c.name === 'brain')) {
       db.exec("ALTER TABLE dependents ADD COLUMN brain TEXT NOT NULL DEFAULT 'deterministic'")
     }
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('16')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Живая местность: истощаемые/восстанавливаемые ресурсы локаций. */
+function migrateV16ToV17(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS location_resources (
+        world_id TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        resource TEXT NOT NULL,
+        amount REAL NOT NULL DEFAULT 0,
+        capacity REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (world_id, location_id, resource)
+      )
+    `)
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
     db.exec('COMMIT')
   } catch (error) {

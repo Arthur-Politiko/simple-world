@@ -145,6 +145,14 @@ export interface DependentRow {
   brain: string
 }
 
+export interface LocationResourceRow {
+  world_id: string
+  location_id: string
+  resource: string
+  amount: number
+  capacity: number
+}
+
 export interface WorldState {
   world: WorldRow
   phaseName: string
@@ -163,6 +171,7 @@ export interface WorldState {
   knowledge: KnowledgeRow[]
   trader: TraderRow
   events: EventRow[]
+  locationResources: LocationResourceRow[]
 }
 
 /** Действие отклонено игровым правилом. */
@@ -199,8 +208,6 @@ function isSeasonStart(day: number): boolean {
   return (day - 1) % DAYS_PER_SEASON === 0
 }
 
-const FORAGE_PHASE = 1 // фаза «день»
-const FORAGE_RESOURCE = 'ягоды'
 // распределение зерна по наделам дворов: у земледельцев поле больше
 const FIELD_HARVEST: Record<string, number> = {
   'hh-marta': 60,
@@ -229,6 +236,27 @@ const CREATURE_DEFS: CreatureDef[] = [
   { id: 'вол', title: 'вол', feed: { resource: 'сено', amount: 2 }, traction: true, fedBonus: 5, hungerPenalty: 20, illnessChance: 0.08, illnessPenalty: 30 },
   { id: 'гусь', title: 'гусь', feed: { resource: 'сено', amount: 1 }, product: { resource: 'яйца', amount: 1 }, fedBonus: 5, hungerPenalty: 20, illnessChance: 0.08, illnessPenalty: 30 },
 ]
+
+interface LocationResourceDef {
+  resource: string
+  capacity: number
+  initial: number
+  regen: number // прирост в день в сезон роста
+  seasons: string[] // сезоны роста
+}
+
+// Живая местность (D-041): истощаемые/восстанавливаемые ресурсы локаций.
+// Масштаб — ~1/3 от справки «Местность и её масштаб» (4 двора против 12).
+const LOCATION_RESOURCES: Record<string, LocationResourceDef[]> = {
+  'loc-forest': [
+    { resource: 'дрова', capacity: 60, initial: 40, regen: 1, seasons: ['весна', 'лето', 'осень'] },
+    { resource: 'ягоды', capacity: 20, initial: 10, regen: 2, seasons: ['лето', 'осень'] },
+    { resource: 'дичь', capacity: 15, initial: 10, regen: 1, seasons: ['весна', 'лето'] },
+  ],
+  'loc-river': [
+    { resource: 'рыба', capacity: 40, initial: 30, regen: 1, seasons: ['весна', 'лето', 'осень'] },
+  ],
+}
 const COIN = 'монеты'
 
 const TRADER_MONEY = 40
@@ -457,11 +485,6 @@ function deliverNews(
   }
 }
 
-function forageAmount(seed: number, day: number): number {
-  const rng = mulberry32((seed + day * 0x9e3779b9) >>> 0)
-  return intRange(rng, 1, 5)
-}
-
 // ---------- автономная повседневная жизнь ----------
 
 /** Домочадцы стареют раз в год (в начале весны). */
@@ -490,6 +513,7 @@ interface TickEntry {
 export const TICK_REGISTRY: TickEntry[] = [
   { name: 'season', phases: [0], tick: tickSeason },
   { name: 'church', phases: [0], tick: tickChurch },
+  { name: 'locationResources', phases: [0], tick: tickLocationResources },
   { name: 'characters', tick: tickCharacters },
   { name: 'dependents', phases: [1], tick: tickDependents },
   { name: 'obligations', phases: [3], tick: tickObligations },
@@ -731,6 +755,24 @@ function tickChurch(db: DatabaseSync, worldId: string, day: number, phase: numbe
     for (const b of chars) {
       if (a.id === b.id) continue
       updateTrust(db, worldId, a.id, b.id, 1, 'община')
+    }
+  }
+}
+
+/** Живая местность: восстановление ресурсов локаций (раз в день, по сезону). */
+function tickLocationResources(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  const season = seasonOfDay(day)
+  for (const [locationId, defs] of Object.entries(LOCATION_RESOURCES)) {
+    for (const def of defs) {
+      if (!def.seasons.includes(season)) continue
+      const row = db
+        .prepare('SELECT amount FROM location_resources WHERE world_id = ? AND location_id = ? AND resource = ?')
+        .get(worldId, locationId, def.resource) as { amount: number } | undefined
+      if (!row) continue
+      const next = Math.min(def.capacity, row.amount + def.regen)
+      if (next !== row.amount) {
+        db.prepare('UPDATE location_resources SET amount = ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(next, worldId, locationId, def.resource)
+      }
     }
   }
 }
@@ -1035,6 +1077,18 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
         loc.kind,
       )
     }
+    // живая местность: истощаемые ресурсы локаций (лес, река)
+    for (const [locationId, defs] of Object.entries(LOCATION_RESOURCES)) {
+      for (const def of defs) {
+        db.prepare('INSERT INTO location_resources (world_id, location_id, resource, amount, capacity) VALUES (?, ?, ?, ?, ?)').run(
+          id,
+          locationId,
+          def.resource,
+          def.initial,
+          def.capacity,
+        )
+      }
+    }
     for (const hh of DEFAULT_HOUSEHOLDS) {
       db.prepare('INSERT INTO households (world_id, id, name, location_id) VALUES (?, ?, ?, ?)').run(
         id,
@@ -1102,12 +1156,6 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
     db.prepare('INSERT INTO trader (world_id, money, salt, grain, present) VALUES (?, 0, 0, 0, 0)').run(id)
 
     // запланированные события
-    db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, 1, ?, ?, ?)').run(
-      id,
-      FORAGE_PHASE,
-      'forage',
-      JSON.stringify({ resource: FORAGE_RESOURCE, locationId: 'loc-forest' }),
-    )
     db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, 5, 0, ?, ?)').run(
       id,
       'trader_visit',
@@ -1162,23 +1210,7 @@ export function advancePhase(db: DatabaseSync, worldId: string): WorldState {
     for (const ev of due) {
       db.prepare('UPDATE scheduled_events SET processed_at = ? WHERE id = ?').run(new Date().toISOString(), ev.id)
 
-      if (ev.type === 'forage') {
-        const payload = JSON.parse(ev.payload) as { resource: string; locationId: string }
-        const amount = forageAmount(world.seed, next.day)
-        addStock(db, worldId, 'location', payload.locationId, payload.resource, amount)
-        logEvent(db, worldId, next.day, next.phase, 'forage', {
-          locationId: payload.locationId,
-          resource: payload.resource,
-          amount,
-        })
-        db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, ?, ?, ?, ?)').run(
-          worldId,
-          next.day + 1,
-          FORAGE_PHASE,
-          ev.type,
-          ev.payload,
-        )
-      } else if (ev.type === 'trader_visit') {
+      if (ev.type === 'trader_visit') {
         handleTraderVisit(db, worldId, next.day, next.phase)
         db.prepare('INSERT INTO scheduled_events (world_id, due_day, due_phase, type, payload) VALUES (?, ?, 0, ?, ?)').run(
           worldId,
@@ -1249,8 +1281,24 @@ export function gather(db: DatabaseSync, worldId: string, characterId: string, r
     throw new RuleError(`количество должно быть положительным целым: ${amount}`)
   }
 
+  // живая местность: сбор истощает запас локации (если ресурс в ней водится)
+  const pool = db
+    .prepare('SELECT amount FROM location_resources WHERE world_id = ? AND location_id = ? AND resource = ?')
+    .get(worldId, chr.location_id, resource) as { amount: number } | undefined
+  if (pool && pool.amount < amount) {
+    throw new RuleError(`в локации не хватает «${resource}»: есть ${pool.amount}, требуется ${amount}`)
+  }
+
   db.exec('BEGIN')
   try {
+    if (pool) {
+      db.prepare('UPDATE location_resources SET amount = amount - ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(
+        amount,
+        worldId,
+        chr.location_id,
+        resource,
+      )
+    }
     addStock(db, worldId, 'character', characterId, resource, amount)
     logEvent(db, worldId, world.day, world.phase, 'gather', {
       characterId,
@@ -1407,6 +1455,9 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     Omit<KnowledgeRow, 'is_true'> & { is_true: number; event_id?: number | null }
   >
   const trader = getTrader(db, worldId)
+  const locationResources = db
+    .prepare('SELECT * FROM location_resources WHERE world_id = ? ORDER BY location_id, resource')
+    .all(worldId) as unknown as LocationResourceRow[]
   const events = db
     .prepare('SELECT * FROM events WHERE world_id = ? ORDER BY day, phase, seq')
     .all(worldId) as unknown as RawEventRow[]
@@ -1428,6 +1479,7 @@ export function getWorldState(db: DatabaseSync, worldId: string): WorldState {
     facts: facts.map((f) => ({ ...f, payload: JSON.parse(f.payload) as unknown })),
     knowledge: knowledge.map((k) => ({ ...k, event_id: k.event_id ?? null, is_true: k.is_true === 1 })),
     trader,
+    locationResources,
     events: events.map((e) => ({
       id: e.id,
       world_id: e.world_id,

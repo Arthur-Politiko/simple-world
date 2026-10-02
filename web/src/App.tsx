@@ -96,6 +96,7 @@ interface WorldState {
   livestock?: Livestock[]
   hives?: Hive[]
   dependents?: Dependent[]
+  locationResources?: { location_id: string; resource: string; amount: number; capacity: number }[]
   stock: StockItem[]
   goals: Goal[]
   obligations: Obligation[]
@@ -496,6 +497,18 @@ export default function App() {
                 </li>
               ))
             )}
+          </ul>
+
+          <h2>Местность (ресурсы)</h2>
+          <ul>
+            {(world.locationResources ?? []).map((r) => {
+              const loc = world.locations.find((l) => l.id === r.location_id)
+              return (
+                <li key={`${r.location_id}-${r.resource}`}>
+                  {loc?.name ?? r.location_id}: {r.resource} {r.amount}/{r.capacity}
+                </li>
+              )
+            })}
           </ul>
 
           <h2>Семья (домочадцы)</h2>
