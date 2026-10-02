@@ -333,13 +333,15 @@ interface FaunaDef {
   capacity: number // ёмкость (потолок популяции)
   game?: boolean // дичь (на неё охотятся)
   predator?: string // кого ест (kind)
+  food?: string // вид флоры, которым кормится (травоядные)
+  grazeRate?: number // норма стравливания флоры в год
 }
 
 // Фауна-популяции (D-041 слой 3): «стая»/«семья» как недо-FSM, не особи.
 const FAUNA: FaunaDef[] = [
-  { locationId: 'loc-forest', kind: 'заяц', title: 'заяц', initial: 20, reproduce: 0.8, winterLoss: 0.25, capacity: 40, game: true },
-  { locationId: 'loc-forest', kind: 'тетерев', title: 'тетерев', initial: 10, reproduce: 0.5, winterLoss: 0.3, capacity: 20, game: true },
-  { locationId: 'loc-forest', kind: 'кабан', title: 'кабан', initial: 8, reproduce: 0.3, winterLoss: 0.2, capacity: 15, game: true },
+  { locationId: 'loc-forest', kind: 'заяц', title: 'заяц', initial: 20, reproduce: 0.8, winterLoss: 0.25, capacity: 40, game: true, food: 'кустарник', grazeRate: 0.003 },
+  { locationId: 'loc-forest', kind: 'тетерев', title: 'тетерев', initial: 10, reproduce: 0.5, winterLoss: 0.3, capacity: 20, game: true, food: 'кустарник', grazeRate: 0.003 },
+  { locationId: 'loc-forest', kind: 'кабан', title: 'кабан', initial: 8, reproduce: 0.3, winterLoss: 0.2, capacity: 15, game: true, food: 'лес', grazeRate: 0.005 },
   { locationId: 'loc-forest', kind: 'лиса', title: 'лиса', initial: 5, reproduce: 0.3, winterLoss: 0.3, capacity: 8, predator: 'заяц' },
 ]
 
@@ -908,16 +910,34 @@ function floraDensityOf(db: DatabaseSync, worldId: string, locationId: string, r
   return row?.density ?? 1
 }
 
+/** Плотность флоры по виду (для кормовой базы фауны). */
+function floraDensityByKind(db: DatabaseSync, worldId: string, locationId: string, kind: string): number {
+  const row = db
+    .prepare('SELECT density FROM flora WHERE world_id = ? AND location_id = ? AND kind = ?')
+    .get(worldId, locationId, kind) as { density: number } | undefined
+  return row?.density ?? 1
+}
+
 /** Оскудить флору (при истощении ресурса). */
 function degradeFlora(db: DatabaseSync, worldId: string, locationId: string, kind: string): void {
   db.prepare('UPDATE flora SET density = MAX(0, density - 0.1) WHERE world_id = ? AND location_id = ? AND kind = ?').run(worldId, locationId, kind)
 }
 
-/** Флора восстанавливается раз в год (весной). */
+/** Флора восстанавливается раз в год (весной) и стравливается травоядными. */
 function tickFlora(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   if (day <= 1 || !isSeasonStart(day) || seasonOfDay(day) !== 'весна') return
+  // восстановление
   for (const f of FLORA) {
     db.prepare('UPDATE flora SET density = MIN(1, density + ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(f.regenPerYear, worldId, f.locationId, f.kind)
+  }
+  // стравливание травоядными
+  for (const fa of FAUNA) {
+    if (!fa.food || !fa.grazeRate) continue
+    const herbivores = faunaCount(db, worldId, fa.locationId, fa.kind)
+    const graze = herbivores * fa.grazeRate
+    if (graze > 0) {
+      db.prepare('UPDATE flora SET density = MAX(0, density - ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(graze, worldId, fa.locationId, fa.food)
+    }
   }
 }
 
@@ -962,7 +982,9 @@ function tickFauna(db: DatabaseSync, worldId: string, day: number, phase: number
   for (const f of FAUNA) {
     const cur = faunaCount(db, worldId, f.locationId, f.kind)
     if (season === 'весна') {
-      setFauna(db, worldId, f.locationId, f.kind, Math.min(f.capacity, cur * (1 + f.reproduce)))
+      // кормовая база: плотность флоры ограничивает ёмкость
+      const density = f.food ? floraDensityByKind(db, worldId, f.locationId, f.food) : 1
+      setFauna(db, worldId, f.locationId, f.kind, Math.min(f.capacity * density, cur * (1 + f.reproduce)))
     } else if (season === 'зима') {
       setFauna(db, worldId, f.locationId, f.kind, cur * (1 - f.winterLoss))
     }
