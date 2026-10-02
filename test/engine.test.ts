@@ -23,7 +23,7 @@ test('создание мира: сущности и начальное сост
   const s = createWorld(db, 'Тест', 42)
   assert.equal(s.world.day, 1)
   assert.equal(s.phaseName, 'утро')
-  assert.equal(s.locations.length, 5)
+  assert.equal(s.locations.length, 6)
   assert.equal(s.characters.length, 7)
   assert.equal(s.households.length, 4)
   assert.ok(s.goals.length >= 4)
@@ -92,8 +92,8 @@ test('два мира в одной базе не конфликтуют и не
   const b = createWorld(db, 'Второй', 2)
 
   assert.notEqual(a.world.id, b.world.id)
-  assert.equal(getWorldState(db, a.world.id).locations.length, 5)
-  assert.equal(getWorldState(db, b.world.id).locations.length, 5)
+  assert.equal(getWorldState(db, a.world.id).locations.length, 6)
+  assert.equal(getWorldState(db, b.world.id).locations.length, 6)
 
   gather(db, a.world.id, 'chr-marta', 'grain', 3)
   const aMarta = getWorldState(db, a.world.id).stock.find(

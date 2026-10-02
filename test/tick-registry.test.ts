@@ -4,7 +4,7 @@ import { TICK_REGISTRY } from '../server/world'
 
 test('реестр тиков: сущности в ожидаемом порядке', () => {
   const names = TICK_REGISTRY.map((e) => e.name)
-  assert.deepEqual(names, ['season', 'characters', 'dependents', 'obligations', 'illness', 'mutualAid'])
+  assert.deepEqual(names, ['season', 'church', 'characters', 'dependents', 'obligations', 'illness', 'mutualAid'])
 })
 
 test('реестр тиков: можно добавить существо записью', () => {

@@ -262,6 +262,7 @@ const DEFAULT_LOCATIONS = [
   { id: 'loc-forest', name: 'Лес', kind: 'forest' },
   { id: 'loc-river', name: 'Река', kind: 'river' },
   { id: 'loc-inn', name: 'Постоялый двор', kind: 'inn' },
+  { id: 'loc-church', name: 'Церковь', kind: 'church' },
 ]
 
 const DEFAULT_HOUSEHOLDS = [
@@ -345,6 +346,11 @@ const DEFAULT_OBLIGATIONS = [
   { characterId: 'chr-marta', recipient: 'сеньор', resource: 'зерно', amount: 20, dueDay: 20 },
   { characterId: 'chr-grzegorz', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 20 },
   { characterId: 'chr-jan', recipient: 'сеньор', resource: 'зерно', amount: 15, dueDay: 20 },
+  // десятина церкви (осень, день 20)
+  { characterId: 'chr-marta', recipient: 'церковь', resource: 'зерно', amount: 6, dueDay: 20 },
+  { characterId: 'chr-grzegorz', recipient: 'церковь', resource: 'зерно', amount: 5, dueDay: 20 },
+  { characterId: 'chr-jan', recipient: 'церковь', resource: 'зерно', amount: 5, dueDay: 20 },
+  { characterId: 'chr-tomek', recipient: 'церковь', resource: 'зерно', amount: 3, dueDay: 20 },
 ]
 
 function getWorld(db: DatabaseSync, worldId: string): WorldRow {
@@ -483,6 +489,7 @@ interface TickEntry {
 /** Реестр сущностей мира. Порядок массива = порядок тика. */
 export const TICK_REGISTRY: TickEntry[] = [
   { name: 'season', phases: [0], tick: tickSeason },
+  { name: 'church', phases: [0], tick: tickChurch },
   { name: 'characters', tick: tickCharacters },
   { name: 'dependents', phases: [1], tick: tickDependents },
   { name: 'obligations', phases: [3], tick: tickObligations },
@@ -712,6 +719,22 @@ function restDay(db: DatabaseSync, worldId: string, day: number, phase: number, 
   logEvent(db, worldId, day, phase, 'rest_day', { characterId: c.id, characterName: c.name })
 }
 
+/** Церковный сход в выходной: общение укрепляет связи общины. */
+function tickChurch(db: DatabaseSync, worldId: string, day: number, phase: number): void {
+  if (!isRestDay(day)) return
+  const chars = db
+    .prepare('SELECT id, name FROM characters WHERE world_id = ? ORDER BY id')
+    .all(worldId) as unknown as Array<{ id: string; name: string }>
+  if (chars.length < 2) return
+  logEvent(db, worldId, day, phase, 'church', { count: chars.length })
+  for (const a of chars) {
+    for (const b of chars) {
+      if (a.id === b.id) continue
+      updateTrust(db, worldId, a.id, b.id, 1, 'община')
+    }
+  }
+}
+
 /** Весенний посев: двор тратит зерно на семена (цель — размер поля / 3). */
 function sowFields(db: DatabaseSync, worldId: string, day: number, phase: number): void {
   const fields = db
@@ -875,7 +898,7 @@ function pickFoodResource(db: DatabaseSync, worldId: string, characterId: string
   return null
 }
 
-function updateTrust(db: DatabaseSync, worldId: string, characterId: string, targetId: string, delta: number): void {
+function updateTrust(db: DatabaseSync, worldId: string, characterId: string, targetId: string, delta: number, note = 'взаимопомощь'): void {
   const existing = db
     .prepare('SELECT trust FROM memory_relationships WHERE world_id = ? AND character_id = ? AND target_id = ?')
     .get(worldId, characterId, targetId) as { trust: number | null } | undefined
@@ -885,7 +908,7 @@ function updateTrust(db: DatabaseSync, worldId: string, characterId: string, tar
     `INSERT INTO memory_relationships (world_id, character_id, target_id, note, trust, updated_at)
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (world_id, character_id, target_id) DO UPDATE SET trust = excluded.trust, updated_at = excluded.updated_at`,
-  ).run(worldId, characterId, targetId, 'взаимопомощь', next, new Date().toISOString())
+  ).run(worldId, characterId, targetId, note, next, new Date().toISOString())
 }
 
 /** Взаимопомощь: нуждающийся (голодный/больной) получает еду от соседа с излишком; растёт доверие. */
