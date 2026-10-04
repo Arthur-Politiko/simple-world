@@ -247,6 +247,13 @@ export function weatherOfDay(seed: number, day: number): string {
   return r < 0.4 ? 'дождливо' : 'солнечно' // осень
 }
 
+/** Паводок: раз в 2–5 лет (вероятность ~40%/год), омолаживает пойму. */
+function isFloodYear(seed: number, day: number): boolean {
+  const year = Math.floor((day - 1) / (DAYS_PER_SEASON * 4)) + 1
+  const rng = mulberry32((seed + year * 0x9e3779b9) >>> 0)
+  return rng() < 0.4
+}
+
 // распределение зерна по наделам дворов: у земледельцев поле больше
 const FIELD_HARVEST: Record<string, number> = {
   'hh-marta': 60,
@@ -941,6 +948,11 @@ function tickFlora(db: DatabaseSync, worldId: string, day: number, phase: number
     if (graze > 0) {
       db.prepare('UPDATE flora SET density = MAX(0, density - ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(graze, worldId, fa.locationId, fa.food)
     }
+  }
+  // паводок: пойменная флора омолаживается (ивняк пышнее)
+  if (isFloodYear(world.seed, day)) {
+    db.prepare("UPDATE flora SET density = MIN(1, density + 0.15) WHERE world_id = ? AND location_id = 'loc-river' AND kind = 'ивняк'").run(worldId)
+    logEvent(db, worldId, day, phase, 'flood', {})
   }
 }
 

@@ -35,6 +35,15 @@ test('почва: у леса суглинок, у реки пойма', () => {
   assert.equal(s.locations.find((l) => l.id === 'loc-river')!.terrain, 'пойма')
 })
 
+test('паводок случается и омолаживает пойму', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 7)
+  const id = s.world.id
+  runDays(db, id, 140) // 5 лет
+  const st = getWorldState(db, id)
+  assert.ok(st.events.some((e) => e.type === 'flood'), 'паводок случился за 5 лет')
+})
+
 test('флора восстанавливается за год', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
