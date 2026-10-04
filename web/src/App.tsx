@@ -405,7 +405,7 @@ export default function App() {
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
       <h1>Живая деревня</h1>
 
-      <WorldMap seed={world?.world.seed ?? 7} />
+      <WorldMap seed={world?.world.seed ?? 7} day={world?.world.day ?? 0} />
 
       {!world && (
         <div>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { generateGrid } from '../server/terrain'
+import { generateGrid, getGrid, tickGrid } from '../server/terrain'
 
 test('сетка генерируется детерминированно', () => {
   const a = generateGrid(7, 50, 40)
@@ -16,4 +16,13 @@ test('сетка содержит почву/гидро/флору', () => {
   assert.ok(terrains.has('суглинок'), 'есть суглинок (смешанный лес)')
   assert.ok(terrains.has('пойма'), 'есть пойма (заливной луг)')
   assert.ok(terrains.has('песок'), 'есть песок (бор)')
+})
+
+test('тик сетки: вырубка зарастает лесом (сукцессия)', () => {
+  const g = getGrid(100, 50, 40)
+  const before = g.cells.filter((c) => c.flora === 'вырубка').length
+  assert.ok(before > 0, 'есть вырубка на старте')
+  for (let day = 1; day <= 30; day++) tickGrid(100, day)
+  const after = g.cells.filter((c) => c.flora === 'вырубка').length
+  assert.equal(after, 0, 'вырубка заросла за 30 дней')
 })

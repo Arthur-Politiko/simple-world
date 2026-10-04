@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { mulberry32, intRange } from './prng'
 import { advanceTime, phaseName, PHASES } from './time'
+import { getGrid, tickGrid } from './terrain'
 
 export interface WorldRow {
   id: string
@@ -1357,6 +1358,7 @@ function handleTraderVisit(db: DatabaseSync, worldId: string, day: number, phase
 export function createWorld(db: DatabaseSync, name: string, seed: number): WorldState {
   const id = randomUUID()
   const now = new Date().toISOString()
+  getGrid(seed) // подготовить сетку мира для этого seed
 
   db.exec('BEGIN')
   try {
@@ -1541,6 +1543,11 @@ export function advancePhase(db: DatabaseSync, worldId: string): WorldState {
   } catch (e) {
     db.exec('ROLLBACK')
     throw e
+  }
+
+  // тик сетки мира раз в день (фаза 0 — новый день)
+  if (next.phase === 0) {
+    tickGrid(world.seed, next.day)
   }
 
   return getWorldState(db, worldId)
