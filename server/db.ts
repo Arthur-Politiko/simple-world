@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 21
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -179,6 +179,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 17) migrateV17ToV18(db)
   if (currentVersion <= 18) migrateV18ToV19(db)
   if (currentVersion <= 19) migrateV19ToV20(db)
+  if (currentVersion <= 20) migrateV20ToV21(db)
   assertSchemaVersion(db)
 }
 
@@ -613,6 +614,25 @@ function migrateV19ToV20(db: DatabaseSync): void {
     const columns = db.prepare('PRAGMA table_info(locations)').all() as Array<{ name: string }>
     if (!columns.some((c) => c.name === 'terrain')) {
       db.exec("ALTER TABLE locations ADD COLUMN terrain TEXT NOT NULL DEFAULT 'суглинок'")
+    }
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('20')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Сукцессия: у флоры стадия и возраст (для леса — смена поколений). */
+function migrateV20ToV21(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    const columns = db.prepare('PRAGMA table_info(flora)').all() as Array<{ name: string }>
+    if (!columns.some((c) => c.name === 'stage')) {
+      db.exec("ALTER TABLE flora ADD COLUMN stage TEXT NOT NULL DEFAULT 'зрелый'")
+    }
+    if (!columns.some((c) => c.name === 'age')) {
+      db.exec('ALTER TABLE flora ADD COLUMN age REAL NOT NULL DEFAULT 0')
     }
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
     db.exec('COMMIT')

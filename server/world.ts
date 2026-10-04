@@ -159,6 +159,8 @@ export interface FloraRow {
   location_id: string
   kind: string
   density: number
+  stage: string
+  age: number
 }
 
 export interface FaunaRow {
@@ -324,6 +326,29 @@ const FLORA: FloraDef[] = [
   { locationId: 'loc-forest', kind: 'кустарник', title: 'кустарник', initial: 0.6, regenPerYear: 0.1 },
   { locationId: 'loc-river', kind: 'ивняк', title: 'ивняк', initial: 0.7, regenPerYear: 0.1 },
 ]
+
+// Сукцессия леса (D-041 слой 5): смена поколений — вырубка → молодняк → смешанный → зрелый.
+interface ForestStage {
+  name: string
+  years: number // лет до перехода в следующую стадию
+  wood: number // ёмкость дровяной древесины (дрова)
+}
+
+const FOREST_STAGES: ForestStage[] = [
+  { name: 'вырубка', years: 7, wood: 5 },
+  { name: 'молодняк', years: 25, wood: 20 },
+  { name: 'смешанный', years: 60, wood: 40 },
+  { name: 'зрелый', years: Infinity, wood: 60 },
+]
+
+function forestStageIndex(stage: string): number {
+  const i = FOREST_STAGES.findIndex((s) => s.name === stage)
+  return i >= 0 ? i : FOREST_STAGES.length - 1
+}
+
+function forestWoodCapacity(stage: string): number {
+  return FOREST_STAGES[forestStageIndex(stage)]?.wood ?? 60
+}
 
 // Ресурс «из флоры» → вид флоры, который оскудевает при истощении.
 const FLORA_RESOURCE_LINK: Record<string, { locationId: string; kind: string }> = {
@@ -873,7 +898,12 @@ function tickLocationResources(db: DatabaseSync, worldId: string, day: number, p
         .get(worldId, locationId, def.resource) as { amount: number } | undefined
       if (!row) continue
       const density = floraDensityOf(db, worldId, locationId, def.resource)
-      const cap = def.capacity * density
+      let cap = def.capacity * density
+      if (def.resource === 'дрова') {
+        // ёмкость дров — от стадии сукцессии леса, а не от плотности
+        const forest = db.prepare("SELECT stage FROM flora WHERE world_id = ? AND kind = 'лес'").get(worldId) as { stage: string } | undefined
+        cap = forestWoodCapacity(forest?.stage ?? 'зрелый')
+      }
       const next = Math.min(cap, row.amount + def.regen * density * weatherFactor)
       if (next !== row.amount) {
         db.prepare('UPDATE location_resources SET amount = ? WHERE world_id = ? AND location_id = ? AND resource = ?').run(next, worldId, locationId, def.resource)
@@ -926,9 +956,12 @@ function floraDensityByKind(db: DatabaseSync, worldId: string, locationId: strin
   return row?.density ?? 1
 }
 
-/** Оскудить флору (при истощении ресурса). */
+/** Оскудить флору (при истощении ресурса); лес при рубке сбрасывается в «вырубку». */
 function degradeFlora(db: DatabaseSync, worldId: string, locationId: string, kind: string): void {
   db.prepare('UPDATE flora SET density = MAX(0, density - 0.1) WHERE world_id = ? AND location_id = ? AND kind = ?').run(worldId, locationId, kind)
+  if (kind === 'лес') {
+    db.prepare("UPDATE flora SET stage = 'вырубка', age = 0 WHERE world_id = ? AND location_id = ? AND kind = 'лес'").run(worldId, locationId)
+  }
 }
 
 /** Флора восстанавливается раз в год (весной, с поправкой на погоду) и стравливается травоядными. */
@@ -939,6 +972,17 @@ function tickFlora(db: DatabaseSync, worldId: string, day: number, phase: number
   // восстановление
   for (const f of FLORA) {
     db.prepare('UPDATE flora SET density = MIN(1, density + ?) WHERE world_id = ? AND location_id = ? AND kind = ?').run(f.regenPerYear * weatherFactor, worldId, f.locationId, f.kind)
+  }
+  // сукцессия леса: старение и смена стадии
+  db.prepare("UPDATE flora SET age = age + 1 WHERE world_id = ? AND kind = 'лес'").run(worldId)
+  const forest = db.prepare("SELECT stage, age FROM flora WHERE world_id = ? AND kind = 'лес'").get(worldId) as { stage: string; age: number } | undefined
+  if (forest) {
+    const idx = forestStageIndex(forest.stage)
+    const cur = FOREST_STAGES[idx]
+    if (cur && forest.age >= cur.years && idx < FOREST_STAGES.length - 1) {
+      db.prepare("UPDATE flora SET stage = ?, age = 0 WHERE world_id = ? AND kind = 'лес'").run(FOREST_STAGES[idx + 1].name, worldId)
+      logEvent(db, worldId, day, phase, 'forest_succession', { stage: FOREST_STAGES[idx + 1].name })
+    }
   }
   // стравливание травоядными
   for (const fa of FAUNA) {

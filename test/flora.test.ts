@@ -44,6 +44,28 @@ test('паводок случается и омолаживает пойму', (
   assert.ok(st.events.some((e) => e.type === 'flood'), 'паводок случился за 5 лет')
 })
 
+test('рубка сбрасывает лес в «вырубку»', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  db.prepare("UPDATE location_resources SET amount = 0 WHERE world_id = ? AND resource = 'дрова'").run(id)
+  runDays(db, id, 1) // лесоруб упрётся в пустой лес → рубка
+  const st = getWorldState(db, id)
+  assert.equal(st.flora.find((f) => f.kind === 'лес')!.stage, 'вырубка', 'лес сброшен в вырубку')
+})
+
+test('лес проходит сукцессию: вырубка → молодняк', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  const id = s.world.id
+  // лесоруб больше не рубит дрова (работник) — лес свободно сукцессирует
+  db.prepare("UPDATE characters SET role = 'работник' WHERE world_id = ? AND id = 'chr-grzegorz'").run(id)
+  db.prepare("UPDATE flora SET stage = 'вырубка', age = 6 WHERE world_id = ? AND kind = 'лес'").run(id)
+  runDays(db, id, 28) // 1 год → возраст 7 → переход
+  const st = getWorldState(db, id)
+  assert.equal(st.flora.find((f) => f.kind === 'лес')!.stage, 'молодняк', 'через 7 лет лес — молодняк')
+})
+
 test('флора восстанавливается за год', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)
