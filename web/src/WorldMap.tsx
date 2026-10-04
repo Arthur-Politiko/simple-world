@@ -22,6 +22,7 @@ interface Grid {
   seed: number
   cells: GridCell[]
   fauna: FaunaPopulation[]
+  village: { x: number; y: number }
 }
 
 function cellColor(cell: GridCell): string {
@@ -56,6 +57,7 @@ export const LEGEND: Array<[string, string]> = [
   ['#e8e8e8', 'заяц'],
   ['#e07a2f', 'лиса'],
   ['#4a2f1a', 'кабан'],
+  ['#e53935', 'деревня'],
 ]
 
 const MIN_CELL = 3
@@ -94,6 +96,15 @@ export default function WorldMap({ seed = 7, day = 0 }: { seed?: number; day?: n
       ctx.beginPath()
       ctx.arc(pop.x * cellSize + cellSize / 2, pop.y * cellSize + cellSize / 2, r, 0, Math.PI * 2)
       ctx.fill()
+    }
+    // деревня — красный маркер с белой обводкой
+    const v = grid.village
+    if (v) {
+      ctx.fillStyle = '#e53935'
+      ctx.fillRect(v.x * cellSize, v.y * cellSize, cellSize, cellSize)
+      ctx.strokeStyle = '#ffffff'
+      ctx.lineWidth = 1
+      ctx.strokeRect(v.x * cellSize + 1, v.y * cellSize + 1, cellSize - 2, cellSize - 2)
     }
   }, [grid, cellSize])
 

@@ -24,6 +24,7 @@ export interface Grid {
   seed: number
   cells: GridCell[]
   fauna: FaunaPopulation[]
+  village: { x: number; y: number }
 }
 
 /** Стадии сукцессии леса (реалистичные сроки; 1 год = 28 дней). */
@@ -117,7 +118,27 @@ export function generateGrid(seed: number, width: number, height: number): Grid 
   spawn('лиса', 4, 2)
   spawn('кабан', 8, 2)
 
-  return { width, height, seed, cells: grid.flat(), fauna }
+  // деревня — на сухом берегу реки (суглинок рядом с поймой, ближе к середине реки)
+  let village = { x: Math.floor(width / 2), y: riverBase }
+  let bestDist = Infinity
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (grid[y][x].terrain !== 'суглинок') continue
+      const nearWater =
+        (y > 0 && grid[y - 1][x].terrain === 'пойма') ||
+        (y < height - 1 && grid[y + 1][x].terrain === 'пойма') ||
+        (x > 0 && grid[y][x - 1].terrain === 'пойма') ||
+        (x < width - 1 && grid[y][x + 1].terrain === 'пойма')
+      if (!nearWater) continue
+      const dist = Math.abs(x - width / 2) + Math.abs(y - riverBase)
+      if (dist < bestDist) {
+        bestDist = dist
+        village = { x, y }
+      }
+    }
+  }
+
+  return { width, height, seed, cells: grid.flat(), fauna, village }
 }
 
 // Хранилище сеток по seed (в памяти; деревня свяжется позже).
