@@ -6,6 +6,7 @@ import { getLLMUsageSummary } from './metrics'
 import { consolidateMemory } from './forgetting'
 import { runDaysWithAutonomy } from './autonomous'
 import { getAuto, startAuto, stopAuto } from './scheduler'
+import { generateGrid } from './terrain'
 import {
   advancePhase,
   consume,
@@ -39,6 +40,13 @@ export function buildApp(db: DatabaseSync): FastifyInstance {
     name: 'village-mvp',
     time: new Date().toISOString(),
   }))
+
+  app.get<{ Querystring: { seed?: string; w?: string; h?: string } }>('/api/grid', async (req) => {
+    const seed = parseInt(req.query.seed ?? '7', 10) || 7
+    const w = Math.min(200, Math.max(10, parseInt(req.query.w ?? '50', 10) || 50))
+    const h = Math.min(200, Math.max(10, parseInt(req.query.h ?? '40', 10) || 40))
+    return generateGrid(seed, w, h)
+  })
 
   app.post('/api/worlds', async (req) => {
     const body = (req.body ?? {}) as { name?: unknown; seed?: unknown }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import WorldMap from './WorldMap'
 
 interface Character {
   id: string
@@ -403,6 +404,8 @@ export default function App() {
   return (
     <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
       <h1>Живая деревня</h1>
+
+      <WorldMap seed={world?.world.seed ?? 7} />
 
       {!world && (
         <div>
