@@ -24,8 +24,6 @@ interface Grid {
   fauna: FaunaPopulation[]
 }
 
-const CELL_SIZE = 10
-
 function cellColor(cell: GridCell): string {
   if (cell.terrain === 'вода') return '#4a90d9'
   if (cell.terrain === 'болото') return '#3f6a3f'
@@ -60,11 +58,16 @@ export const LEGEND: Array<[string, string]> = [
   ['#4a2f1a', 'кабан'],
 ]
 
-/** Рендер сетки мира: клетка = цвет, фауна = точки; легенда + клик для осмотра. */
+const MIN_CELL = 3
+const MAX_CELL = 24
+const DEFAULT_CELL = 10
+
+/** Рендер сетки мира: клетка = цвет, фауна = точки; зум + клик для осмотра. */
 export default function WorldMap({ seed = 7, day = 0 }: { seed?: number; day?: number }) {
   const [grid, setGrid] = useState<Grid | null>(null)
   const [selected, setSelected] = useState<GridCell | null>(null)
   const [faunaAt, setFaunaAt] = useState<FaunaPopulation[]>([])
+  const [cellSize, setCellSize] = useState(DEFAULT_CELL)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -79,33 +82,49 @@ export default function WorldMap({ seed = 7, day = 0 }: { seed?: number; day?: n
     if (!canvas || !grid) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    canvas.width = grid.width * CELL_SIZE
-    canvas.height = grid.height * CELL_SIZE
+    canvas.width = grid.width * cellSize
+    canvas.height = grid.height * cellSize
     for (const cell of grid.cells) {
       ctx.fillStyle = cellColor(cell)
-      ctx.fillRect(cell.x * CELL_SIZE, cell.y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
+      ctx.fillRect(cell.x * cellSize, cell.y * cellSize, cellSize, cellSize)
     }
     for (const pop of grid.fauna ?? []) {
       ctx.fillStyle = FAUNA_COLORS[pop.kind] ?? '#ffffff'
-      const r = Math.max(2, Math.min(CELL_SIZE / 2, 1 + Math.log2(pop.count + 1)))
+      const r = Math.max(2, Math.min(cellSize / 2, 1 + Math.log2(pop.count + 1)))
       ctx.beginPath()
-      ctx.arc(pop.x * CELL_SIZE + CELL_SIZE / 2, pop.y * CELL_SIZE + CELL_SIZE / 2, r, 0, Math.PI * 2)
+      ctx.arc(pop.x * cellSize + cellSize / 2, pop.y * cellSize + cellSize / 2, r, 0, Math.PI * 2)
       ctx.fill()
     }
-  }, [grid])
+  }, [grid, cellSize])
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas || !grid) return
     const rect = canvas.getBoundingClientRect()
-    const x = Math.floor((e.clientX - rect.left) / CELL_SIZE)
-    const y = Math.floor((e.clientY - rect.top) / CELL_SIZE)
+    const x = Math.floor((e.clientX - rect.left) / cellSize)
+    const y = Math.floor((e.clientY - rect.top) / cellSize)
     setSelected(grid.cells.find((c) => c.x === x && c.y === y) ?? null)
     setFaunaAt(grid.fauna.filter((f) => f.x === x && f.y === y))
   }
 
+  const zoom = (delta: number) => setCellSize((s) => Math.min(MAX_CELL, Math.max(MIN_CELL, s + delta)))
+
   return (
     <div>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <button onClick={() => zoom(-2)} title="Уменьшить">−</button>
+        <input
+          type="range"
+          min={MIN_CELL}
+          max={MAX_CELL}
+          value={cellSize}
+          onChange={(e) => setCellSize(Number(e.target.value))}
+          style={{ width: 140 }}
+        />
+        <button onClick={() => zoom(2)} title="Увеличить">+</button>
+        <span style={{ fontSize: '0.85rem', minWidth: '3rem' }}>{cellSize} px</span>
+        <button onClick={() => setCellSize(DEFAULT_CELL)} style={{ fontSize: '0.8rem' }}>сброс</button>
+      </div>
       <canvas
         ref={canvasRef}
         onClick={handleClick}
