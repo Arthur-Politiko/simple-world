@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 
 export function openDb(path: string): DatabaseSync {
   if (path !== ':memory:') {
@@ -178,6 +178,7 @@ function migrate(db: DatabaseSync): void {
   if (currentVersion <= 16) migrateV16ToV17(db)
   if (currentVersion <= 17) migrateV17ToV18(db)
   if (currentVersion <= 18) migrateV18ToV19(db)
+  if (currentVersion <= 19) migrateV19ToV20(db)
   assertSchemaVersion(db)
 }
 
@@ -597,6 +598,22 @@ function migrateV18ToV19(db: DatabaseSync): void {
         PRIMARY KEY (world_id, location_id, kind)
       )
     `)
+    db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run('19')
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** Почва: тип грунта у локации (статичный, определяет, что растёт). */
+function migrateV19ToV20(db: DatabaseSync): void {
+  db.exec('BEGIN')
+  try {
+    const columns = db.prepare('PRAGMA table_info(locations)').all() as Array<{ name: string }>
+    if (!columns.some((c) => c.name === 'terrain')) {
+      db.exec("ALTER TABLE locations ADD COLUMN terrain TEXT NOT NULL DEFAULT 'суглинок'")
+    }
     db.prepare("UPDATE schema_meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
     db.exec('COMMIT')
   } catch (error) {

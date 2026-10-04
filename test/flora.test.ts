@@ -28,6 +28,13 @@ test('истощение ресурса оскудивает флору', () => 
   assert.ok(after < before, 'лес оскудел от переруба')
 })
 
+test('почва: у леса суглинок, у реки пойма', () => {
+  const db = openDb(':memory:')
+  const s = createWorld(db, 'Тест', 1)
+  assert.equal(s.locations.find((l) => l.id === 'loc-forest')!.terrain, 'суглинок')
+  assert.equal(s.locations.find((l) => l.id === 'loc-river')!.terrain, 'пойма')
+})
+
 test('флора восстанавливается за год', () => {
   const db = openDb(':memory:')
   const s = createWorld(db, 'Тест', 1)

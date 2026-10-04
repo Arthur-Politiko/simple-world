@@ -17,6 +17,7 @@ export interface LocationRow {
   id: string
   name: string
   kind: string
+  terrain: string
 }
 
 export interface HouseholdRow {
@@ -374,12 +375,12 @@ const ROLES: Record<string, RoleDef> = {
 }
 
 const DEFAULT_LOCATIONS = [
-  { id: 'loc-village', name: 'Деревня', kind: 'center' },
-  { id: 'loc-field', name: 'Поле', kind: 'field' },
-  { id: 'loc-forest', name: 'Лес', kind: 'forest' },
-  { id: 'loc-river', name: 'Река', kind: 'river' },
-  { id: 'loc-inn', name: 'Постоялый двор', kind: 'inn' },
-  { id: 'loc-church', name: 'Церковь', kind: 'church' },
+  { id: 'loc-village', name: 'Деревня', kind: 'center', terrain: 'суглинок' },
+  { id: 'loc-field', name: 'Поле', kind: 'field', terrain: 'суглинок' },
+  { id: 'loc-forest', name: 'Лес', kind: 'forest', terrain: 'суглинок' },
+  { id: 'loc-river', name: 'Река', kind: 'river', terrain: 'пойма' },
+  { id: 'loc-inn', name: 'Постоялый двор', kind: 'inn', terrain: 'суглинок' },
+  { id: 'loc-church', name: 'Церковь', kind: 'church', terrain: 'суглинок' },
 ]
 
 const DEFAULT_HOUSEHOLDS = [
@@ -1311,11 +1312,12 @@ export function createWorld(db: DatabaseSync, name: string, seed: number): World
     )
 
     for (const loc of DEFAULT_LOCATIONS) {
-      db.prepare('INSERT INTO locations (world_id, id, name, kind) VALUES (?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO locations (world_id, id, name, kind, terrain) VALUES (?, ?, ?, ?, ?)').run(
         id,
         loc.id,
         loc.name,
         loc.kind,
+        loc.terrain,
       )
     }
     // живая местность: истощаемые ресурсы локаций (лес, река)
