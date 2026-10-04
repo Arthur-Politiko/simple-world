@@ -134,12 +134,12 @@ export function tickGrid(seed: number, day: number): void {
     if (cell.terrain === 'болото') {
       for (const [dx, dy] of OFFSETS) {
         const n = at(cell.x + dx, cell.y + dy)
-        if (n && n.terrain === 'суглинок' && rng() < 0.02) changes.push([n, 'болото', 'сфагнум'])
+        if (n && n.terrain === 'суглинок' && rng() < 0.001) changes.push([n, 'болото', 'сфагнум'])
       }
     } else if (cell.flora === 'смешанный' || cell.flora === 'зрелый') {
       for (const [dx, dy] of OFFSETS) {
         const n = at(cell.x + dx, cell.y + dy)
-        if (n && (n.flora === 'вырубка' || n.flora === 'луг') && rng() < 0.03) changes.push([n, n.terrain, 'молодняк'])
+        if (n && (n.flora === 'вырубка' || n.flora === 'луг') && rng() < 0.002) changes.push([n, n.terrain, 'молодняк'])
       }
     }
   }
