@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import WorldMap from './WorldMap'
+import WorldMap, { LEGEND } from './WorldMap'
 
 interface Character {
   id: string
@@ -402,10 +402,8 @@ export default function App() {
   }, [autoOn, worldId])
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem', maxWidth: 860, margin: '0 auto' }}>
+    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '1.5rem' }}>
       <h1>Живая деревня</h1>
-
-      <WorldMap seed={world?.world.seed ?? 7} day={world?.world.day ?? 0} />
 
       {!world && (
         <div>
@@ -417,169 +415,197 @@ export default function App() {
       )}
 
       {world && (
-        <>
-          <header style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            <div>
+        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          {/* ЛЕВАЯ: карта + кнопки */}
+          <div style={{ flex: '1 1 55%', minWidth: 460 }}>
+            <header style={{ marginBottom: '0.75rem' }}>
               <strong>День {world.world.day}</strong> · {world.season ?? '—'} · {world.weather ?? '—'} · {world.phaseName} · seed {world.world.seed}
+            </header>
+            <WorldMap seed={world.world.seed} day={world.world.day} />
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
+              <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
+              <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
+              <button onClick={() => runDays(7)} disabled={busy}>Продвинуть 7 дней</button>
+              <button onClick={() => runDays(28)} disabled={busy}>Год (28 дн.)</button>
+              <button onClick={toggleAuto} disabled={busy}>{autoOn ? '⏸ Стоп' : '▶ Авто'}</button>
+              <button onClick={runAutonomous} disabled={busy}>Автономный день (LLM)</button>
+              <button onClick={() => setMode(mode === 'game' ? 'debug' : 'game')}>Режим: {mode === 'game' ? 'игра' : 'отладка'}</button>
+              <button onClick={createWorld} disabled={busy}>Новый мир</button>
             </div>
-            <button onClick={() => advance('phase')} disabled={busy}>Следующая фаза</button>
-            <button onClick={() => advance('day')} disabled={busy}>Продвинуть день</button>
-            <button onClick={() => runDays(7)} disabled={busy}>Продвинуть 7 дней</button>
-            <button onClick={() => runDays(28)} disabled={busy}>Год (28 дн.)</button>
-            <button onClick={toggleAuto} disabled={busy}>{autoOn ? '⏸ Стоп' : '▶ Авто'}</button>
-            <button onClick={runAutonomous} disabled={busy}>Автономный день (LLM)</button>
-            <button onClick={() => setMode(mode === 'game' ? 'debug' : 'game')}>Режим: {mode === 'game' ? 'игра' : 'отладка'}</button>
-            <button onClick={createWorld} disabled={busy}>Новый мир</button>
-          </header>
+          </div>
 
-          <h2>Жители</h2>
-          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-            <thead>
-              <tr>
-                <th style={th}>Имя</th>
-                <th style={th}>Роль</th>
-                <th style={th}>Локация</th>
-                <th style={th}>Сил</th>
-                <th style={th}>Здор.</th>
-                {mode === 'debug' && <th style={th}>Память</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {world.characters.map((c) => (
-                <tr key={c.id}>
-                  <td style={td}>{c.name}</td>
-                  <td style={td}>{ROLE_TITLES[c.role] ?? c.role}</td>
-                  <td style={td}>{locationOf(c.location_id)}</td>
-                  <td style={td}>{c.energy}</td>
-                  <td style={td}>{c.health}</td>
-                  {mode === 'debug' && (
-                    <td style={td}>
-                      <button onClick={() => loadMemory(c.id)} disabled={busy}>
-                        {selectedCharacterId === c.id && memory ? 'Открыто' : 'Wiki'}
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <h2>Скот (особи)</h2>
-          {(world.livestock ?? []).length === 0 ? (
-            <p>Скота нет.</p>
-          ) : (
-            <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-              <thead>
-                <tr>
-                  <th style={th}>Особь</th>
-                  <th style={th}>Вид</th>
-                  <th style={th}>Двор</th>
-                  <th style={th}>Здоровье</th>
-                  <th style={th}>Возраст</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(world.livestock ?? []).map((l) => (
-                  <tr key={l.id}>
-                    <td style={td}>{l.name ?? l.id}</td>
-                    <td style={td}>{l.kind}</td>
-                    <td style={td}>{householdNameOf(l.household_id)}</td>
-                    <td style={td}>{l.health}</td>
-                    <td style={td}>{l.age}</td>
-                  </tr>
+          {/* ПРАВАЯ: легенда + детали (сворачиваемые) */}
+          <div style={{ flex: '1 1 40%', minWidth: 300, maxHeight: '85vh', overflow: 'auto', border: '1px solid #e5e5e5', borderRadius: 8, padding: '0.75rem' }}>
+            <details open>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Карта (легенда)</summary>
+              <div style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
+                {LEGEND.map(([color, label]) => (
+                  <div key={label} style={{ marginBottom: '0.2rem' }}>
+                    <span style={{ display: 'inline-block', width: '0.7rem', height: '0.7rem', background: color, marginRight: '0.4rem', verticalAlign: 'middle' }} />
+                    {label}
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          )}
+              </div>
+            </details>
 
-          <h2>Ульи</h2>
-          <ul>
-            {(world.hives ?? []).length === 0 ? (
-              <li>Ульев нет.</li>
-            ) : (
-              (world.hives ?? []).map((h) => (
-                <li key={h.id}>
-                  {h.id} — {householdNameOf(h.household_id)}, сила {h.strength}
-                </li>
-              ))
-            )}
-          </ul>
-
-          <h2>Местность (ресурсы)</h2>
-          <ul>
-            {(world.locationResources ?? []).map((r) => {
-              const loc = world.locations.find((l) => l.id === r.location_id)
-              return (
-                <li key={`${r.location_id}-${r.resource}`}>
-                  {loc?.name ?? r.location_id}: {r.resource} {r.amount}/{r.capacity}
-                </li>
-              )
-            })}
-          </ul>
-          <p>
-            Флора (плотность):{' '}
-            {(world.flora ?? []).map((f) => `${f.kind} ${Math.round(f.density * 100)}%`).join(' · ') || '—'}
-          </p>
-          <p>
-            Фауна:{' '}
-            {(world.fauna ?? []).map((f) => `${f.kind} ${Math.round(f.count)}`).join(' · ') || '—'}
-          </p>
-
-          <h2>Семья (домочадцы)</h2>
-          <ul>
-            {world.households.map((hh) => {
-              const deps = (world.dependents ?? []).filter((d) => d.household_id === hh.id)
-              return (
-                <li key={hh.id}>
-                  <strong>{hh.name}</strong>
-                  {deps.length === 0 ? ' —' : (
-                    <ul>
-                      {deps.map((d) => (
-                        <li key={d.id}>
-                          {d.name} ({d.relation}, {d.age})
-                          <button onClick={() => void promoteDependent(d.id)} disabled={busy} style={{ marginLeft: '0.5rem' }}>
-                            ↗ в персонажа
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Жители</summary>
+              <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Имя</th>
+                    <th style={th}>Роль</th>
+                    <th style={th}>Локация</th>
+                    <th style={th}>Сил</th>
+                    <th style={th}>Здор.</th>
+                    {mode === 'debug' && <th style={th}>Память</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {world.characters.map((c) => (
+                    <tr key={c.id}>
+                      <td style={td}>{c.name}</td>
+                      <td style={td}>{ROLE_TITLES[c.role] ?? c.role}</td>
+                      <td style={td}>{locationOf(c.location_id)}</td>
+                      <td style={td}>{c.energy}</td>
+                      <td style={td}>{c.health}</td>
+                      {mode === 'debug' && (
+                        <td style={td}>
+                          <button onClick={() => loadMemory(c.id)} disabled={busy}>
+                            {selectedCharacterId === c.id && memory ? 'Открыто' : 'Wiki'}
                           </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
 
-          <h2>Наделы</h2>
-          <ul>
-            {world.households.map((hh) => {
-              const plots = (world.plots ?? []).filter((p) => p.household_id === hh.id)
-              return (
-                <li key={hh.id}>
-                  <strong>{hh.name}</strong>:{' '}
-                  {plots
-                    .map((p) => {
-                      const parts = [`${p.kind} ${p.size}`]
-                      if (p.harvest !== null) parts.push(`урожай ${p.harvest}`)
-                      if (p.sown !== null) parts.push(`посев ${p.sown}`)
-                      if (p.manure !== null) parts.push(`навоз ${p.manure}`)
-                      return parts.join(' / ')
-                    })
-                    .join('; ') || 'наделов нет'}
-                </li>
-              )
-            })}
-          </ul>
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Скот (особи)</summary>
+              {(world.livestock ?? []).length === 0 ? (
+                <p>Скота нет.</p>
+              ) : (
+                <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Особь</th>
+                      <th style={th}>Вид</th>
+                      <th style={th}>Двор</th>
+                      <th style={th}>Здоровье</th>
+                      <th style={th}>Возраст</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(world.livestock ?? []).map((l) => (
+                      <tr key={l.id}>
+                        <td style={td}>{l.name ?? l.id}</td>
+                        <td style={td}>{l.kind}</td>
+                        <td style={td}>{householdNameOf(l.household_id)}</td>
+                        <td style={td}>{l.health}</td>
+                        <td style={td}>{l.age}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </details>
+
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Ульи</summary>
+              <ul>
+                {(world.hives ?? []).length === 0 ? (
+                  <li>Ульев нет.</li>
+                ) : (
+                  (world.hives ?? []).map((h) => (
+                    <li key={h.id}>
+                      {h.id} — {householdNameOf(h.household_id)}, сила {h.strength}
+                    </li>
+                  ))
+                )}
+              </ul>
+            </details>
+
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Местность (ресурсы)</summary>
+              <ul>
+                {(world.locationResources ?? []).map((r) => {
+                  const loc = world.locations.find((l) => l.id === r.location_id)
+                  return (
+                    <li key={`${r.location_id}-${r.resource}`}>
+                      {loc?.name ?? r.location_id}: {r.resource} {r.amount}/{r.capacity}
+                    </li>
+                  )
+                })}
+              </ul>
+              <p>
+                Флора (плотность):{' '}
+                {(world.flora ?? []).map((f) => `${f.kind} ${Math.round(f.density * 100)}%`).join(' · ') || '—'}
+              </p>
+              <p>
+                Фауна:{' '}
+                {(world.fauna ?? []).map((f) => `${f.kind} ${Math.round(f.count)}`).join(' · ') || '—'}
+              </p>
+            </details>
+
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Семья (домочадцы)</summary>
+              <ul>
+                {world.households.map((hh) => {
+                  const deps = (world.dependents ?? []).filter((d) => d.household_id === hh.id)
+                  return (
+                    <li key={hh.id}>
+                      <strong>{hh.name}</strong>
+                      {deps.length === 0 ? ' —' : (
+                        <ul>
+                          {deps.map((d) => (
+                            <li key={d.id}>
+                              {d.name} ({d.relation}, {d.age})
+                              <button onClick={() => void promoteDependent(d.id)} disabled={busy} style={{ marginLeft: '0.5rem' }}>
+                                ↗ в персонажа
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </details>
+
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Наделы</summary>
+              <ul>
+                {world.households.map((hh) => {
+                  const plots = (world.plots ?? []).filter((p) => p.household_id === hh.id)
+                  return (
+                    <li key={hh.id}>
+                      <strong>{hh.name}</strong>:{' '}
+                      {plots
+                        .map((p) => {
+                          const parts = [`${p.kind} ${p.size}`]
+                          if (p.harvest !== null) parts.push(`урожай ${p.harvest}`)
+                          if (p.sown !== null) parts.push(`посев ${p.sown}`)
+                          if (p.manure !== null) parts.push(`навоз ${p.manure}`)
+                          return parts.join(' / ')
+                        })
+                        .join('; ') || 'наделов нет'}
+                    </li>
+                  )
+                })}
+              </ul>
+            </details>
 
           {selectedCharacterId && (
-            <section style={{ marginTop: '1.5rem', border: '1px solid #ddd', borderRadius: 8, padding: '1rem' }}>
-              <header style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
-                <h2 style={{ margin: 0 }}>Wiki: {nameOf(selectedCharacterId)}</h2>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button onClick={() => void loadMemory(selectedCharacterId)} disabled={busy}>Обновить</button>
-                  <a href={`/api/worlds/${world.world.id}/characters/${selectedCharacterId}/memory.md`} target="_blank" rel="noreferrer">Скачать Markdown</a>
-                  <button onClick={() => { setSelectedCharacterId(null); setMemory(null); setMemoryError(null) }}>Закрыть</button>
-                </div>
-              </header>
+            <details open>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Wiki: {nameOf(selectedCharacterId)}</summary>
+              <div style={{ display: 'flex', gap: '0.5rem', margin: '0.5rem 0' }}>
+                <button onClick={() => void loadMemory(selectedCharacterId)} disabled={busy}>Обновить</button>
+                <a href={`/api/worlds/${world.world.id}/characters/${selectedCharacterId}/memory.md`} target="_blank" rel="noreferrer">Скачать Markdown</a>
+                <button onClick={() => { setSelectedCharacterId(null); setMemory(null); setMemoryError(null) }}>Закрыть</button>
+              </div>
               {memoryError && <p style={{ color: 'crimson' }}>{memoryError}</p>}
               {!memory && !memoryError && <p>Загружаю память…</p>}
               {memory && (
@@ -607,13 +633,13 @@ export default function App() {
                   )}
                 </>
               )}
-            </section>
+            </details>
           )}
 
           {selectedCharacterId && (
-            <section style={{ marginTop: '1.5rem', border: '1px solid #ddd', borderRadius: 8, padding: '1rem' }}>
-              <h2 style={{ marginTop: 0 }}>Взаимодействие: {nameOf(selectedCharacterId)}</h2>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            <details open>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Взаимодействие: {nameOf(selectedCharacterId)}</summary>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', margin: '0.5rem 0' }}>
                 <button onClick={() => void askIntention()} disabled={interactionBusy}>Спросить намерение</button>
                 <button onClick={() => void giftGrain()} disabled={interactionBusy}>Подарить зерно (+1)</button>
                 {intention && (
@@ -641,68 +667,76 @@ export default function App() {
                 </p>
               )}
               {interactionError && <p style={{ color: 'crimson', marginBottom: 0 }}>{interactionError}</p>}
-            </section>
+            </details>
           )}
 
-          <h2>Запасы</h2>
-          <ul>
-            {world.stock.map((s, i) => (
-              <li key={i}>
-                <strong>{s.resource}</strong> × {s.quantity} — {s.holder_type === 'character' ? nameOf(s.holder_id) : locationOf(s.holder_id)}
-              </li>
-            ))}
-          </ul>
-
-          <h2>Обязательства</h2>
-          <ul>
-            {world.obligations.map((o) => (
-              <li key={o.id}>
-                {nameOf(o.character_id)} → {o.recipient}: {o.amount} «{o.resource}» до дня {o.due_day} —{' '}
-                <strong>{STATUS_TITLES[o.status] ?? o.status}</strong>
-              </li>
-            ))}
-          </ul>
-
-          <h2>Цели</h2>
-          <ul>
-            {world.goals.map((g) => (
-              <li key={g.id}>
-                {nameOf(g.character_id)}: {g.description}
-              </li>
-            ))}
-          </ul>
-
-          {mode === 'debug' && (
-            <>
-              <h2>Журнал (последние события)</h2>
-              <ul style={{ maxHeight: 320, overflow: 'auto', border: '1px solid #ddd', padding: '0.5rem 0.5rem 0.5rem 1.5rem' }}>
-                {world.events
-                  .slice(-40)
-                  .reverse()
-                  .map((e, i) => (
-                    <li key={world.events.length - i} style={{ whiteSpace: 'nowrap' }}>
-                      <span style={{ color: '#888' }}>
-                        д{e.day} {PHASES[e.phase]} ·{' '}
-                      </span>
-                      {e.type}
-                      {typeof e.payload?.characterName === 'string' ? ` — ${e.payload.characterName}` : ''}
-                      {typeof e.payload?.amount === 'number' && typeof e.payload?.resource === 'string'
-                        ? `: ${e.payload.amount} «${e.payload.resource}»`
-                        : ''}
-                    </li>
-                  ))}
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Запасы</summary>
+              <ul>
+                {world.stock.map((s, i) => (
+                  <li key={i}>
+                    <strong>{s.resource}</strong> × {s.quantity} — {s.holder_type === 'character' ? nameOf(s.holder_id) : locationOf(s.holder_id)}
+                  </li>
+                ))}
               </ul>
-              <h2>Знания и факты</h2>
-              <h3>Факты</h3>
-              <ul>{world.facts.map((f) => <li key={f.id}>д{f.day} {f.type}</li>)}</ul>
-              <h3>Знания NPC</h3>
-              <ul>{world.knowledge.map((k) => <li key={k.id}>[{k.source}] {k.summary} ({k.is_true ? 'факт' : 'слух'})</li>)}</ul>
-              <p>
-                LLM: {llmMetrics ? `${llmMetrics.totals.calls} вызовов · ${llmMetrics.totals.completionTokens} токенов · стоимость ${llmMetrics.totals.cost ?? 'не задана'}` : '…'}
-              </p>
-            </>
-          )}
-        </>
+            </details>
+
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Обязательства</summary>
+              <ul>
+                {world.obligations.map((o) => (
+                  <li key={o.id}>
+                    {nameOf(o.character_id)} → {o.recipient}: {o.amount} «{o.resource}» до дня {o.due_day} —{' '}
+                    <strong>{STATUS_TITLES[o.status] ?? o.status}</strong>
+                  </li>
+                ))}
+              </ul>
+            </details>
+
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Цели</summary>
+              <ul>
+                {world.goals.map((g) => (
+                  <li key={g.id}>
+                    {nameOf(g.character_id)}: {g.description}
+                  </li>
+                ))}
+              </ul>
+            </details>
+
+            {mode === 'debug' && (
+              <details>
+                <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Журнал / знания / LLM</summary>
+                <h3>Журнал (последние события)</h3>
+                <ul style={{ maxHeight: 320, overflow: 'auto', border: '1px solid #ddd', padding: '0.5rem 0.5rem 0.5rem 1.5rem' }}>
+                  {world.events
+                    .slice(-40)
+                    .reverse()
+                    .map((e, i) => (
+                      <li key={world.events.length - i} style={{ whiteSpace: 'nowrap' }}>
+                        <span style={{ color: '#888' }}>
+                          д{e.day} {PHASES[e.phase]} ·{' '}
+                        </span>
+                        {e.type}
+                        {typeof e.payload?.characterName === 'string' ? ` — ${e.payload.characterName}` : ''}
+                        {typeof e.payload?.amount === 'number' && typeof e.payload?.resource === 'string'
+                          ? `: ${e.payload.amount} «${e.payload.resource}»`
+                          : ''}
+                      </li>
+                    ))}
+                </ul>
+                <h3>Знания и факты</h3>
+                <h4>Факты</h4>
+                <ul>{world.facts.map((f) => <li key={f.id}>д{f.day} {f.type}</li>)}</ul>
+                <h4>Знания NPC</h4>
+                <ul>{world.knowledge.map((k) => <li key={k.id}>[{k.source}] {k.summary} ({k.is_true ? 'факт' : 'слух'})</li>)}</ul>
+                <p>
+                  LLM: {llmMetrics ? `${llmMetrics.totals.calls} вызовов · ${llmMetrics.totals.completionTokens} токенов · стоимость ${llmMetrics.totals.cost ?? 'не задана'}` : '…'}
+                </p>
+              </details>
+            )}
+          </div>
+        </div>
       )}
 
       {error && <p style={{ color: 'crimson' }}>Ошибка: {error}</p>}

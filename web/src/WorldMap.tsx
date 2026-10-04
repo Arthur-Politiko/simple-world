@@ -46,7 +46,7 @@ const FAUNA_COLORS: Record<string, string> = {
   кабан: '#4a2f1a',
 }
 
-const LEGEND: Array<[string, string]> = [
+export const LEGEND: Array<[string, string]> = [
   ['#4a90d9', 'вода'],
   ['#3f6a3f', 'болото (сфагнум)'],
   ['#7dbd6a', 'пойма (луг)'],
@@ -111,14 +111,6 @@ export default function WorldMap({ seed = 7, day = 0 }: { seed?: number; day?: n
         onClick={handleClick}
         style={{ border: '1px solid #333', imageRendering: 'pixelated', maxWidth: '100%', cursor: 'crosshair' }}
       />
-      <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
-        {LEGEND.map(([color, label]) => (
-          <span key={label} style={{ marginRight: '1rem', whiteSpace: 'nowrap' }}>
-            <span style={{ display: 'inline-block', width: '0.7rem', height: '0.7rem', background: color, marginRight: '0.25rem', verticalAlign: 'middle' }} />
-            {label}
-          </span>
-        ))}
-      </div>
       {selected && (
         <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
           <strong>
