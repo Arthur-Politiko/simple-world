@@ -9,11 +9,25 @@ interface GridCell {
   age: number
 }
 
+interface FaunaPopulation {
+  kind: string
+  x: number
+  y: number
+  count: number
+}
+
 interface Grid {
   width: number
   height: number
   seed: number
   cells: GridCell[]
+  fauna: FaunaPopulation[]
+}
+
+const FAUNA_COLORS: Record<string, string> = {
+  заяц: '#e8e8e8',
+  лиса: '#e07a2f',
+  кабан: '#4a2f1a',
 }
 
 function cellColor(cell: GridCell): string {
@@ -54,6 +68,14 @@ export default function WorldMap({ seed = 7, day = 0 }: { seed?: number; day?: n
     for (const cell of grid.cells) {
       ctx.fillStyle = cellColor(cell)
       ctx.fillRect(cell.x * cellSize, cell.y * cellSize, cellSize, cellSize)
+    }
+    // фауна — точки поверх клеток (размер зависит от численности)
+    for (const pop of grid.fauna ?? []) {
+      ctx.fillStyle = FAUNA_COLORS[pop.kind] ?? '#ffffff'
+      const r = Math.max(2, Math.min(cellSize / 2, 1 + Math.log2(pop.count + 1)))
+      ctx.beginPath()
+      ctx.arc(pop.x * cellSize + cellSize / 2, pop.y * cellSize + cellSize / 2, r, 0, Math.PI * 2)
+      ctx.fill()
     }
   }, [grid])
 

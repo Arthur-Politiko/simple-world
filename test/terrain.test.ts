@@ -26,3 +26,14 @@ test('тик сетки: вырубка зарастает лесом (сукц�
   const after = g.cells.filter((c) => c.flora === 'вырубка').length
   assert.equal(after, 0, 'вырубка заросла за 5 лет')
 })
+
+test('фауна на сетке: популяции живы и перемещаются', () => {
+  const g = getGrid(200, 50, 40)
+  assert.ok(g.fauna.length > 0, 'есть фауна')
+  const startPos = g.fauna.map((f) => `${f.x},${f.y}`).join('|')
+  for (let day = 1; day <= 140; day++) tickGrid(200, day) // 5 лет
+  assert.ok(g.fauna.length > 0, 'фауна жива после 5 лет')
+  assert.ok(g.fauna.every((f) => f.count > 0), 'все популяции живы')
+  const endPos = g.fauna.map((f) => `${f.x},${f.y}`).join('|')
+  assert.notEqual(startPos, endPos, 'фауна переместилась')
+})

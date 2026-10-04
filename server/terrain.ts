@@ -11,11 +11,19 @@ export interface GridCell {
   age: number
 }
 
+export interface FaunaPopulation {
+  kind: string
+  x: number
+  y: number
+  count: number
+}
+
 export interface Grid {
   width: number
   height: number
   seed: number
   cells: GridCell[]
+  fauna: FaunaPopulation[]
 }
 
 /** Стадии сукцессии леса (реалистичные сроки; 1 год = 28 дней). */
@@ -24,6 +32,21 @@ const FOREST_STAGES: Record<string, { days: number; next: string }> = {
   молодняк: { days: 448, next: 'смешанный' }, // ~16 лет
   смешанный: { days: 980, next: 'зрелый' }, // ~35 лет
   зрелый: { days: Infinity, next: 'зрелый' },
+}
+
+/** Фауна-популяции на сетке: корм, дрейф к равновесию, хищник. */
+interface FaunaSpec {
+  food: string[] // какую флору ест (пусто — хищник, корм не нужен)
+  target: number // равновесная численность при наличии корма
+  starve: number // численность без корма
+  drift: number // шаг дрейфа к равновесию (0..1)
+  predator?: string // кого ест (kind)
+}
+
+const FAUNA_SPECIES: Record<string, FaunaSpec> = {
+  заяц: { food: ['луг', 'молодняк'], target: 60, starve: 3, drift: 0.03 },
+  кабан: { food: ['смешанный', 'зрелый'], target: 25, starve: 3, drift: 0.03 },
+  лиса: { food: [], target: 8, starve: 2, drift: 0.03, predator: 'заяц' },
 }
 
 /**
@@ -85,7 +108,16 @@ export function generateGrid(seed: number, width: number, height: number): Grid 
     }
   }
 
-  return { width, height, seed, cells: grid.flat() }
+  // фауна: несколько стай/семей, случайно разбросанных по карте
+  const fauna: FaunaPopulation[] = []
+  const spawn = (kind: string, count: number, n: number) => {
+    for (let i = 0; i < n; i++) fauna.push({ kind, x: Math.floor(rng() * width), y: Math.floor(rng() * height), count })
+  }
+  spawn('заяц', 15, 3)
+  spawn('лиса', 4, 2)
+  spawn('кабан', 8, 2)
+
+  return { width, height, seed, cells: grid.flat(), fauna }
 }
 
 // Хранилище сеток по seed (в памяти; деревня свяжется позже).
@@ -147,5 +179,25 @@ export function tickGrid(seed: number, day: number): void {
     c.terrain = terrain
     c.flora = flora
     c.age = 0
+  }
+
+  // 3) фауна: перемещение + дрейф численности к равновесию (по корму)
+  for (const pop of grid.fauna) {
+    const spec = FAUNA_SPECIES[pop.kind]
+    if (!spec) continue
+    const [dx, dy] = OFFSETS[Math.floor(rng() * OFFSETS.length)]
+    pop.x = Math.max(0, Math.min(width - 1, pop.x + dx))
+    pop.y = Math.max(0, Math.min(height - 1, pop.y + dy))
+    const cell = at(pop.x, pop.y)
+    const hasFood = spec.food.length === 0 || (cell !== undefined && spec.food.includes(cell.flora))
+    const target = hasFood ? spec.target : spec.starve
+    pop.count = Math.max(1, Math.round(pop.count + (target - pop.count) * spec.drift))
+  }
+  // хищничество: лиса ест зайца в той же клетке
+  for (const pred of grid.fauna) {
+    const spec = FAUNA_SPECIES[pred.kind]
+    if (!spec?.predator) continue
+    const prey = grid.fauna.find((p) => p.kind === spec.predator && p.x === pred.x && p.y === pred.y && p.count > 0)
+    if (prey) prey.count = Math.max(1, prey.count - 1)
   }
 }
