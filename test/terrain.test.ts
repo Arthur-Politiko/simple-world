@@ -18,11 +18,11 @@ test('сетка содержит почву/гидро/флору', () => {
   assert.ok(terrains.has('песок'), 'есть песок (бор)')
 })
 
-test('тик сетки: вырубка зарастает лесом (сукцессия)', () => {
+test('тик сетки: вырубка зарастает лесом (сукцессия, 5 лет)', () => {
   const g = getGrid(100, 50, 40)
   const before = g.cells.filter((c) => c.flora === 'вырубка').length
   assert.ok(before > 0, 'есть вырубка на старте')
-  for (let day = 1; day <= 30; day++) tickGrid(100, day)
+  for (let day = 1; day <= 140; day++) tickGrid(100, day) // 5 лет
   const after = g.cells.filter((c) => c.flora === 'вырубка').length
-  assert.equal(after, 0, 'вырубка заросла за 30 дней')
+  assert.equal(after, 0, 'вырубка заросла за 5 лет')
 })
